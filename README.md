@@ -1,5 +1,7 @@
 # Garden Planner v2
 
+**Live:** https://nokill-pedal-co.github.io/garden-planner/ (GitHub Pages from `main`, root folder).
+
 Pixel-art garden planner PWA. Clean rebuild of v1 (`../index.html`, kept as legacy).
 Design notes: [ARCHITECTURE.md](ARCHITECTURE.md).
 
@@ -18,7 +20,7 @@ No build step, no `node_modules`. Any static server works:
 python tools/serve.py 5173
 ```
 
-Then open http://127.0.0.1:5173/. Without Supabase config it runs in offline mode (data in this browser only).
+Then open http://localhost:5173/. Without Supabase config it runs in offline mode (data in this browser only).
 
 Tests (Node 24, no dependencies):
 
