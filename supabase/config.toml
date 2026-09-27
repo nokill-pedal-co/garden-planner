@@ -1,0 +1,11 @@
+# Minimal Supabase config: `supabase config push --project-ref unobfrradopjdkfrddll` only
+# changes what's declared here. Add the hosted URL to both lists when the app is deployed.
+project_id = "garden-planner"
+
+[auth]
+site_url = "http://localhost:5174/"
+additional_redirect_urls = [
+  "http://localhost:5174/",
+  "http://127.0.0.1:5174/",
+  "http://localhost:5173/",
+]
