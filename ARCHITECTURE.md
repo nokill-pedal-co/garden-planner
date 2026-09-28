@@ -33,6 +33,7 @@ v2/
     season.js           frost dates, sowing windows, tasks       (pure)
     geo.js              feet <-> lat/lng, polygons, rotation      (pure)
     importer.js         v1 garden-db.json / v1 export -> v2 rows  (pure)
+    advisor.js          per-bed planning advice: carryover, frost casualties, soil prep, rotation, ideas (pure)
     sprites.js          sprite data (pure) + spriteURL() renderer (DOM, lazy)
     ui.js               tiny DOM helpers, modal, toast
     views/
@@ -136,3 +137,11 @@ Goal: a new user types their address and gets a ready-made yard. Pipeline, all f
    draw it on the photo. Driveways/paths: user adds via "+ House / path" over the photo layer.
 Structures already support polygons (`structureCorners`, `scaleStructure` in geo.js), so steps 1–3 just write data.
 Overpass/Nominatim have usage policies (low volume, identify the app) — run lookups once per garden, cache results.
+
+## Plan mode (bed view)
+`Now (2026) | Plan 2027` switch per bed. Plan shows what stays over winter (perennials, hardy/overwintering crops,
+blue badge) plus plantings with `season = planYear`; placing in Plan creates `status: planned, season: planYear`.
+The Now view and the Yard hide future-season plans. `advisor.js#bedAdvice` drives the side card:
+staying (+ until when), won't make it (tender / quick / half-hardy), conflicts (carryover blocks planned windows),
+rotation (families grown in the last 2 seasons -> avoid heavy repeats, FOLLOW_WITH table), soil prep rules,
+and ideas (2027 list first, then by rotation rank, crops you grow first).

@@ -480,3 +480,21 @@ input[type="range"] { accent-color: var(--green); }
 .pix-hr { height: var(--px); background: var(--line); border: 0; margin: 16px 0; opacity: 0.4; }
 
 input[type="file"] { max-width: 100%; font-size: 14px; }
+
+/* ------------------------------------------------------------ planning mode */
+
+.mode-switch { display: flex; gap: 4px; align-items: center; margin-bottom: 8px; flex-wrap: wrap; }
+.plant .carry-badge {
+  position: absolute; left: -3px; top: -3px; width: 10px; height: 10px;
+  background: var(--sky); box-shadow: 0 0 0 2px var(--ink); pointer-events: none;
+}
+.advisor h4 { display: flex; align-items: center; gap: 6px; margin: 14px 0 6px; font-size: 15px; }
+.advisor h4 img { width: 16px; height: 16px; }
+.adv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.adv-list li { display: flex; gap: 8px; align-items: flex-start; }
+.adv-list li > img { width: 24px; height: 24px; flex: none; }
+.adv-ideas { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; }
+.adv-ideas .chip { font-size: 12px; }
+.adv-ideas .chip .small { font-size: 9px; }
+.adv-sprites { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 2px; }
+.adv-sprites img { width: 24px; height: 24px; }

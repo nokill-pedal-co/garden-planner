@@ -10,6 +10,7 @@ import {
   progress, displayName, todayStr, companionIssues, rotationIssues, bedCapacity, expectedHarvest, prettyDate,
 } from '../season.js';
 import { unitPositions, plantSpots, isSolo } from '../geo.js';
+import { bedAdvice } from '../advisor.js';
 import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, STATUS_LABELS } from './common.js';
 import { fmtFt } from './yard.js';
 
@@ -32,6 +33,9 @@ export function mount(main, bedId) {
     placeAs: store.storage.get('gp2.placeAs', 'planted'),
     placeQty: 1,          // how many plants the next tap places (in a row at their spacing)
     showDone: false,
+    // 'now' edits this season; 'plan' lays out a future season (placements become planned plantings).
+    mode: store.storage.get('gp2.bedMode', 'now'),
+    planYear: defaultPlanYear(),
   };
 
   const state = () => store.getState();
@@ -58,9 +62,21 @@ export function mount(main, bedId) {
     }
     store.storage.set(LAST_BED, bed.id);
     const season = Number(todayStr().slice(0, 4));
-    const plantings = state().plantings.filter(p => p.bed_id === bed.id && (ui.showDone || !['done', 'failed'].includes(p.status)));
+    const planning = ui.mode === 'plan';
+    const garden = state().garden;
+    const advice = planning ? bedAdvice({
+      bed, plantings: state().plantings, custom: custom(), planYear: ui.planYear, today: todayStr(),
+      climate: { lastFrost: garden.last_frost, firstFrost: garden.first_frost },
+    }) : null;
+    const carry = new Set(advice ? advice.staying.map(x => x.planting.id) : []);
+    const plantings = state().plantings.filter(p => p.bed_id === bed.id && (planning
+      // Plan: what stays over winter plus whatever is planned for that year.
+      ? carry.has(p.id) || (p.season === ui.planYear && !['done', 'failed'].includes(p.status))
+      // Now: this season (future plans are hidden until you switch to Plan).
+      : p.season <= season && (ui.showDone || !['done', 'failed'].includes(p.status))));
+    ui.carry = carry;
     const plants = plantings.reduce((n, p) => n + (p.qty || 1), 0);
-    const cap = bedCapacity(bed, state().plantings, custom());
+    const cap = bedCapacity(bed, plantings, custom());
     const issues = companionIssues(plantings, custom());
     const rot = rotationIssues(bed, state().plantings, season, custom());
     const size = bed.shape === 'round'
@@ -68,6 +84,11 @@ export function mount(main, bedId) {
       : `${fmtFt(bed.length_ft)} × ${fmtFt(bed.width_ft)}${bed.height_ft ? ` × ${fmtFt(bed.height_ft)}` : ''}`;
 
     view.append(
+      h('div.mode-switch', { role: 'tablist', 'aria-label': 'Season' },
+        h(`button.btn.sm${planning ? '' : '.primary'}`, { role: 'tab', 'aria-selected': String(!planning), onclick: () => setMode('now') }, `Now (${season})`),
+        h(`button.btn.sm${planning ? '.primary' : ''}`, { role: 'tab', 'aria-selected': String(planning), onclick: () => setMode('plan') }, icon('calendar', 16), `Plan ${ui.planYear}`),
+        planning ? h('button.btn.sm.ghost', { 'aria-label': 'Plan the year before', disabled: ui.planYear <= season, onclick: () => { ui.planYear--; render(); } }, '‹') : null,
+        planning ? h('button.btn.sm.ghost', { 'aria-label': 'Plan the year after', onclick: () => { ui.planYear++; render(); } }, '›') : null),
       h('div.bed-head',
         h('div.grow',
           h('h1', bed.name),
@@ -79,8 +100,8 @@ export function mount(main, bedId) {
         h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), bed.kind === 'container' ? 'Edit pot' : 'Edit bed'),
       ),
       h('div.bed-layout',
-        h('div.stack', stage(bed, plantings, issues), issuesCard(issues, rot, cap, bed)),
-        h('div.stack', selectedCard(bed), paletteCard(), trayCard(season)),
+        h('div.stack', stage(bed, plantings, issues), planning ? null : issuesCard(issues, rot, cap, bed)),
+        h('div.stack', selectedCard(bed), planning ? advisorCard(bed, advice) : null, paletteCard(), trayCard(planning ? ui.planYear : season)),
       ),
     );
   }
@@ -186,7 +207,8 @@ export function mount(main, bedId) {
     // Spacing ring (skipped in pots, where the pot itself is the plant's space).
     ui.selected === p.id && !inPot ? h('i.ring', { style: { width: `${spacingFt * ppf}px`, height: `${spacingFt * ppf}px` } }) : null,
     h('img', { src: spriteURL(key, plant.tint), alt: '' }),
-    pr.stage === 'ready' ? h('i.spark') : null);
+    pr.stage === 'ready' ? h('i.spark') : null,
+    ui.mode === 'plan' && ui.carry?.has(p.id) ? h('i.carry-badge', { title: 'Staying over winter' }) : null);
   }
 
   /** Move the i-th plant of planting p to (x, y), saving the full position list. */
@@ -295,12 +317,14 @@ export function mount(main, bedId) {
     // One tap places one planting (of `placeQty` plants in a row), then the seed box disarms;
     // use +1 on the selected plant, or pick it again, to add more.
     const plant = getPlant(ui.armed.plantKey, custom());
-    const planted = ui.placeAs === 'planted';
+    const planning = ui.mode === 'plan';
+    const planted = !planning && ui.placeAs === 'planted';
     const byTransplant = plant.daysFrom === 'transplant';
     const qty = isPot(bed) ? 1 : ui.placeQty;
     const positions = unitPositions({ qty, x_ft: x, y_ft: y, positions: null }, bed, spacingFtOf(plant));
     const p = store.addPlanting({
       bed_id: bed.id, plant_key: plant.key, qty, x_ft: x, y_ft: y, positions,
+      ...(planning ? { season: ui.planYear } : {}),
       status: planted ? 'planted' : 'planned',
       method: plant.perennial ? 'perennial' : byTransplant ? 'transplant' : 'direct',
       sow_date: planted && !byTransplant ? today : null,
@@ -355,7 +379,10 @@ export function mount(main, bedId) {
       onclick: () => {
         ui.armed = ui.armed?.plantKey === p.key ? null : { plantKey: p.key };
         render();
-        if (ui.armed) toast(`Tap the soil to place ${ui.placeQty > 1 ? `${ui.placeQty} × ` : ''}${p.name}`);
+        if (ui.armed) {
+          showSoil();
+          toast(`Tap the soil to place ${ui.placeQty > 1 ? `${ui.placeQty} × ` : ''}${p.name}`);
+        }
       },
     }, plantSprite(p.key, custom(), { size: 32, alt: '' }), p.name)));
   }
@@ -368,7 +395,7 @@ export function mount(main, bedId) {
       oninput: e => { ui.q = e.target.value; const next = paletteGrid(); grid.replaceWith(next); grid = next; } });
     const card = h('section.card.px.palette',
       h('div.row', h('h3.grow', { style: { margin: 0 } }, 'Seed box'),
-        h('label.row.small', 'Place as',
+        ui.mode === 'plan' ? h('span.small.muted', `Adds to the ${ui.planYear} plan`) : h('label.row.small', 'Place as',
           h('select', { style: { width: 'auto', minHeight: '32px' }, onchange: e => { ui.placeAs = e.target.value; store.storage.set('gp2.placeAs', ui.placeAs); } },
             h('option', { value: 'planted', selected: ui.placeAs === 'planted' }, 'Planted today'),
             h('option', { value: 'planned', selected: ui.placeAs === 'planned' }, 'Planned')))),
@@ -387,8 +414,10 @@ export function mount(main, bedId) {
   }
 
   function trayCard(season) {
-    const loose = state().plantings.filter(p => !p.bed_id && !['done', 'failed'].includes(p.status) && p.season >= season - 0);
-    const unpositioned = state().plantings.filter(p => p.bed_id === currentBed()?.id && p.x_ft == null && !['done', 'failed'].includes(p.status));
+    const planning = ui.mode === 'plan';
+    const inSeason = p => (planning ? p.season === season : p.season <= season);
+    const loose = state().plantings.filter(p => !p.bed_id && !['done', 'failed'].includes(p.status) && inSeason(p));
+    const unpositioned = state().plantings.filter(p => p.bed_id === currentBed()?.id && p.x_ft == null && !['done', 'failed'].includes(p.status) && inSeason(p));
     const items = [...unpositioned, ...loose];
     return h('section.card.px',
       h('h3', 'Unplaced'),
@@ -404,6 +433,55 @@ export function mount(main, bedId) {
         : h('p.small.muted', 'Planned crops without a bed show up here.'),
       h('label.row.small', { style: { marginTop: '8px' } },
         h('input', { type: 'checkbox', checked: ui.showDone, onchange: e => { ui.showDone = e.target.checked; render(); } }), 'Show finished plantings in bed'));
+  }
+
+  /** After picking something to place, bring the bed back on screen (the pickers sit below it). */
+  function showSoil() {
+    requestAnimationFrame(() => {
+      const soil = view.querySelector('.bed-soil');
+      const r = soil?.getBoundingClientRect();
+      if (r && (r.top < 60 || r.bottom > innerHeight)) soil.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+
+  function setMode(mode) {
+    ui.mode = mode;
+    ui.selected = null;
+    ui.armed = null;
+    store.storage.set('gp2.bedMode', mode);
+    render();
+  }
+
+  function advisorCard(bed, a) {
+    const section = (title, ic, body) => (body && (!Array.isArray(body) || body.length)
+      ? h('div.adv-section', h('h4', icon(ic, 16), title), body) : null);
+    const who = list => h('ul.adv-list', list.map(x => h('li', plantSprite(x.plant.key, custom(), { size: 24 }),
+      h('div', h('b', x.name), h('div.small.muted', x.note)))));
+    // Same reason for many plants (e.g. every tender crop): one line per reason.
+    const grouped = list => {
+      const byNote = new Map();
+      for (const x of list) {
+        const key = x.note.replace(/ by ~[A-Z][a-z]{2} \d+/, '');
+        if (!byNote.has(key)) byNote.set(key, []);
+        byNote.get(key).push(x);
+      }
+      return h('ul.adv-list', [...byNote.values()].map(xs => h('li',
+        h('div',
+          h('div.adv-sprites', [...new Map(xs.map(x => [x.plant.key, x])).values()].map(x => plantSprite(x.plant.key, custom(), { size: 24 }))),
+          h('b', [...new Set(xs.map(x => x.name))].join(', ')),
+          h('div.small.muted', xs[0].note)))));
+    };
+    return h('section.card.px.advisor',
+      h('h3', `Planning ${ui.planYear}`),
+      section('Staying over winter', 'frost', a.staying.length ? who(a.staying) : null),
+      section("Won't make it", 'warn', a.ending.length ? grouped(a.ending) : null),
+      section('Watch out', 'clash', a.conflicts.length ? h('ul.adv-list', a.conflicts.map(c => h('li', h('div.small', c)))) : null),
+      section('Rotation', 'book', h('p.small', a.rotation.note)),
+      section('Before you plant', 'shovel', a.prep.length ? h('ul.adv-list', a.prep.map(x => h('li', h('div', h('b', x.title), h('div.small.muted', x.detail))))) : null),
+      section(`Ideas for ${ui.planYear}`, 'seed', a.ideas.length ? h('div.adv-ideas', a.ideas.map(i => h('button.chip', {
+        type: 'button', title: i.reason,
+        onclick: () => { ui.armed = { plantKey: i.plant.key }; render(); showSoil(); toast(`Tap the soil to plan ${i.plant.name} for ${ui.planYear}`); },
+      }, plantSprite(i.plant.key, custom(), { size: 32, alt: '' }), h('span', i.plant.name), h('span.small.muted', i.reason)))) : null));
   }
 
   function issuesCard(issues, rot, cap, bed) {
@@ -444,6 +522,12 @@ export function mount(main, bedId) {
     unsub();
     removeEventListener('resize', onResize);
   };
+}
+
+/** Planning is for next year once the summer's mostly past, else for this year. */
+function defaultPlanYear(now = todayStr()) {
+  const y = Number(now.slice(0, 4));
+  return now.slice(5) >= '07-01' ? y + 1 : y;
 }
 
 function snap(v) {

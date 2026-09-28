@@ -321,12 +321,14 @@ export function mount(main) {
   }
 
   function drawPlants(bed, today) {
+    const thisYear = Number(today.slice(0, 4));
     const custom = store.customPlants();
     // Small icons on the map (full 16px only at max zoom), never bigger than a pot.
     const base = ppf() >= 32 ? 16 : ppf() >= 6 ? 8 : 0;
     const size = isSolo(bed) && base ? Math.min(base, Math.max(4, Math.floor(bed.length_ft * ppf() * 0.8 / 4) * 4)) : base;
     for (const p of state().plantings) {
       if (p.bed_id !== bed.id || p.x_ft == null || ['done', 'failed'].includes(p.status)) continue;
+      if (p.season > thisYear) continue; // next year's plans live in the bed's Plan mode
       const plant = getPlant(p.plant_key, custom);
       const pr = progress(p, plant, today);
       const key = pr.stage === 'started' ? 'seedling' : plant.sprite;
