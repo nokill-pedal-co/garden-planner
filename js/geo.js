@@ -153,3 +153,20 @@ export function unitPositions(planting, bed, spacingFt) {
 export function isSolo(bed) {
   return bed?.kind === 'container' || (bed?.kind === 'ground' && bed?.shape === 'round');
 }
+
+/** Where to draw a planting's plants: always the centre of a pot/single-plant patch, else unitPositions. */
+export function plantSpots(planting, bed, spacingFt) {
+  if (isSolo(bed)) return Array.from({ length: Math.max(1, planting.qty || 1) }, () => [bed.length_ft / 2, bed.width_ft / 2]);
+  return unitPositions(planting, bed, spacingFt);
+}
+
+/** Planting fields after its bed is resized: keep plants at the same relative spot (centred in pots). */
+export function rescaleSpots(planting, oldBed, newBed, spacingFt) {
+  if (isSolo(newBed)) {
+    const c = [round2(newBed.length_ft / 2), round2(newBed.width_ft / 2)];
+    return { x_ft: c[0], y_ft: c[1], positions: Array.from({ length: Math.max(1, planting.qty || 1) }, () => c) };
+  }
+  const kx = newBed.length_ft / oldBed.length_ft, ky = newBed.width_ft / oldBed.width_ft;
+  const positions = unitPositions(planting, oldBed, spacingFt).map(([x, y]) => [round2(x * kx), round2(y * ky)]);
+  return { x_ft: positions[0][0], y_ft: positions[0][1], positions };
+}

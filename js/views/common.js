@@ -4,7 +4,7 @@ import * as store from '../store.js';
 import { h, icon, plantSprite, sprite, sheet, field, select, formData, confirmSheet, toast } from '../ui.js';
 import { getPlant, allPlants, CATEGORIES } from '../plants.js';
 import { displayName, expectedHarvest, progress, todayStr, prettyDate, sowingWindows, addDays } from '../season.js';
-import { POT_SIZES, potDims } from '../geo.js';
+import { POT_SIZES, potDims, rescaleSpots } from '../geo.js';
 
 export const STATUS_LABELS = {
   planned: 'Planned', started: 'Started indoors', planted: 'In the ground',
@@ -106,7 +106,16 @@ export async function editBedSheet(bed) {
     }
     return null;
   }
-  return res ? store.updateBed(bed.id, res) : null;
+  if (!res) return null;
+  const updated = store.updateBed(bed.id, res);
+  // Resizing a bed or pot keeps its plants where they were relative to it (centred in pots).
+  if (updated.length_ft !== bed.length_ft || updated.width_ft !== bed.width_ft || updated.kind !== bed.kind || updated.shape !== bed.shape) {
+    for (const p of store.getState().plantings.filter(x => x.bed_id === bed.id && x.x_ft != null)) {
+      const spacingFt = Math.max(1 / 6, (getPlant(p.plant_key, store.customPlants()).spacingIn || 12) / 12);
+      store.updatePlanting(p.id, rescaleSpots(p, bed, updated, spacingFt));
+    }
+  }
+  return updated;
 }
 
 // ------------------------------------------------------------ structures (house, driveway…)

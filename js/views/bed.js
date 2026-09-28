@@ -9,7 +9,7 @@ import { getPlant, allPlants, CATEGORIES } from '../plants.js';
 import {
   progress, displayName, todayStr, companionIssues, rotationIssues, bedCapacity, expectedHarvest, prettyDate,
 } from '../season.js';
-import { unitPositions, isSolo } from '../geo.js';
+import { unitPositions, plantSpots, isSolo } from '../geo.js';
 import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, STATUS_LABELS } from './common.js';
 import { fmtFt } from './yard.js';
 
@@ -151,7 +151,7 @@ export function mount(main, bedId) {
     for (const p of plantings) {
       if (p.x_ft == null) continue;
       const plant = getPlant(p.plant_key, custom());
-      const units = unitPositions(p, bed, spacingFtOf(plant));
+      const units = plantSpots(p, bed, spacingFtOf(plant));
       units.forEach(([x, y], i) => {
         const el = plantEl(p, plant, i, x, y, ppf, today, clash.has(p.id), friend.has(p.id), maxSprite, isPot(bed));
         soil.append(el);
@@ -168,7 +168,7 @@ export function mount(main, bedId) {
     // Every plant gets the same icon size (a whole-number multiple of the 16px sprite, so pixels
     // stay crisp); spacing is shown by the ring and the space meter instead. A lone plant in a
     // pot or patch fills it.
-    const uniform = Math.max(32, Math.min(64, Math.round((ppf * 0.6) / 16) * 16));
+    const uniform = Math.max(32, Math.min(48, Math.round((ppf * 0.45) / 16) * 16));
     const size = inPot ? maxSprite : Math.min(uniform, maxSprite);
     const cls = ['plant', p.status === 'planned' && 'planned', ui.selected === p.id && 'selected', pr.stage === 'ready' && 'ready',
       isClash && 'clash', !isClash && isFriend && 'friend', p.locked && 'locked'].filter(Boolean).join('.');

@@ -10,7 +10,7 @@ import * as store from '../store.js';
 import { h, icon, fill, toast } from '../ui.js';
 import { spriteCanvas } from '../sprites.js';
 import { getPlant } from '../plants.js';
-import { isSolo, bedCorners, bedOutline, structureCorners, scaleStructure, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng, rotate, unitPositions } from '../geo.js';
+import { isSolo, bedCorners, bedOutline, structureCorners, scaleStructure, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng, rotate, plantSpots } from '../geo.js';
 import { spacingFtOf } from './bed.js';
 import { editBedSheet, newBedSheet, structureSheet, STRUCTURE_KINDS } from './common.js';
 import { progress, todayStr } from '../season.js';
@@ -322,13 +322,15 @@ export function mount(main) {
 
   function drawPlants(bed, today) {
     const custom = store.customPlants();
-    const size = ppf() >= 16 ? 16 : ppf() >= 6 ? 8 : 0;
+    // Small icons on the map (full 16px only at max zoom), never bigger than a pot.
+    const base = ppf() >= 32 ? 16 : ppf() >= 6 ? 8 : 0;
+    const size = isSolo(bed) && base ? Math.min(base, Math.max(4, Math.floor(bed.length_ft * ppf() * 0.8 / 4) * 4)) : base;
     for (const p of state().plantings) {
       if (p.bed_id !== bed.id || p.x_ft == null || ['done', 'failed'].includes(p.status)) continue;
       const plant = getPlant(p.plant_key, custom);
       const pr = progress(p, plant, today);
       const key = pr.stage === 'started' ? 'seedling' : plant.sprite;
-      for (const [ux, uy] of unitPositions(p, bed, spacingFtOf(plant))) {
+      for (const [ux, uy] of plantSpots(p, bed, spacingFtOf(plant))) {
         const [sx, sy] = toScreen(...bedToGarden(bed, ux, uy));
         if (!size) {
           ctx.fillStyle = plant.tint?.A || '#38b764';

@@ -105,3 +105,14 @@ test('Bed 8 imports as two rows of four at 18"', () => {
     assert.ok(xs[0] >= 0 && xs.at(-1) <= bed8.length_ft, `${p.variety} row fits: ${xs}`);
   }
 });
+
+test('plants stay centred in pots and scale with resized beds', async () => {
+  const { plantSpots, rescaleSpots } = await import('../js/geo.js');
+  const pot = { kind: 'container', shape: 'round', length_ft: 3, width_ft: 3 };
+  assert.deepEqual(plantSpots({ qty: 1, x_ft: 0.5, y_ft: 0.5, positions: [[0.5, 0.5]] }, pot, 1), [[1.5, 1.5]]);
+  const r = rescaleSpots({ qty: 1, x_ft: 0.5, y_ft: 0.5 }, { ...pot, length_ft: 1, width_ft: 1 }, pot, 1);
+  assert.deepEqual(r.positions, [[1.5, 1.5]]);
+  const bed = { kind: 'raised', shape: 'rect', length_ft: 6, width_ft: 3 };
+  const s = rescaleSpots({ qty: 2, x_ft: 1, y_ft: 1, positions: [[1, 1], [5, 2]] }, bed, { ...bed, length_ft: 12, width_ft: 6 }, 1);
+  assert.deepEqual(s.positions, [[2, 2], [10, 4]]);
+});
