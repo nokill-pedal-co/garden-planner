@@ -27,10 +27,20 @@ test('history names only the crops actually recorded, never the rest of the fami
   // Bed 7: peppers, leeks and a melon, never tomatoes, garlic, squash or cucumbers.
   const a = advise([P({ plant_key: 'cal_wonder' }), P({ plant_key: 'cayenne' }), P({ plant_key: 'leeks' }), P({ plant_key: 'tigger_melon' })]);
   const had = a.rotation.note.match(/^This bed had (.*?)\./)[1];
-  assert.equal(had, 'peppers, leeks and melons');
+  assert.equal(had, 'peppers, melons and leeks');
   assert.ok(!/garlic|onion/.test(a.rotation.note.split('Good things')[0]));
   assert.ok(!a.rotation.follow.includes('allium'), 'no alliums straight after leeks');
   assert.ok(a.prep.every(p => !/tomato/i.test(p.title)), a.prep.map(p => p.title).join(' / '));
+});
+
+test('removed (done) brassicas still count: no brassicas suggested, and they lead the history', () => {
+  // Bed 1: kale, broccoli and cabbage came out mid-season; lots of greens followed.
+  const a = advise(['perpetual_spinach', 'lettuce', 'radish_mixed', 'jalapeno', 'marigold', 'cilantro', 'bush_bean']
+    .map(k => P({ plant_key: k })).concat(['kale', 'broccoli', 'cabbage'].map(k => P({ plant_key: k, status: 'done' }))));
+  assert.ok(a.rotation.avoid.includes('brassica'));
+  assert.ok(!a.rotation.follow.includes('brassica'));
+  assert.ok(a.ideas.every(i => i.plant.family !== 'brassica'), a.ideas.map(i => i.plant.name).join(', '));
+  assert.match(a.rotation.note, /^This bed had [^.]*kale, broccoli,? (and )?cabbage/);
 });
 
 test('radishes and arugula are not treated as hungry cabbage-family crops', () => {

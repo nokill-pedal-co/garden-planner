@@ -115,9 +115,9 @@ export function bedAdvice({ bed, plantings, climate, custom, planYear, today }) 
   // The crops actually recorded here, by generic name: "peppers", "leeks".
   const kinds = fams => [...new Set((fams ? rotYears : lastYears).filter(p => !fams || fams.includes(lookup(p.plant_key).family))
     .map(p => cropWord(lookup(p.plant_key), custom)))];
-  const had = kinds();
-  const hadText = had.length > 6 ? `${had.slice(0, 5).join(', ')} and ${had.length - 5} more` : joinWords(had);
   const avoidKinds = kinds(avoid);
+  const had = [...new Set([...avoidKinds, ...kinds()])]; // the ones that matter for rotation first
+  const hadText = had.length > 6 ? `${had.slice(0, 5).join(', ')} and ${had.length - 5} more` : joinWords(had);
   const relatives = avoid.flatMap(f => (RELATIVES[f] || []).filter(r => !avoidKinds.includes(r)).slice(0, 3));
   const rotation = {
     grown, avoid, follow, had,
