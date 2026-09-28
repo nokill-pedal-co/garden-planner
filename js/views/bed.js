@@ -10,7 +10,7 @@ import {
   progress, displayName, todayStr, companionIssues, rotationIssues, bedCapacity, expectedHarvest, prettyDate,
 } from '../season.js';
 import { unitPositions, plantSpots, isSolo } from '../geo.js';
-import { bedAdvice } from '../advisor.js';
+import { bedAdvice, familyName } from '../advisor.js';
 import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, STATUS_LABELS } from './common.js';
 import { fmtFt } from './yard.js';
 
@@ -476,7 +476,7 @@ export function mount(main, bedId) {
       section('Staying over winter', 'frost', a.staying.length ? who(a.staying) : null),
       section("Won't make it", 'warn', a.ending.length ? grouped(a.ending) : null),
       section('Watch out', 'clash', a.conflicts.length ? h('ul.adv-list', a.conflicts.map(c => h('li', h('div.small', c)))) : null),
-      section('Rotation', 'book', h('p.small', a.rotation.note)),
+      section('What to plant next', 'book', h('p.small', a.rotation.note)),
       section('Before you plant', 'shovel', a.prep.length ? h('ul.adv-list', a.prep.map(x => h('li', h('div', h('b', x.title), h('div.small.muted', x.detail))))) : null),
       section(`Ideas for ${ui.planYear}`, 'seed', a.ideas.length ? h('div.adv-ideas', a.ideas.map(i => h('button.chip', {
         type: 'button', title: i.reason,
@@ -493,7 +493,7 @@ export function mount(main, bedId) {
     for (const i of issues.filter(i => i.kind === 'avoid')) {
       items.push(h('li', icon('clash', 24), `${i.names[0]} and ${i.names[1]} don't like being neighbours.`));
     }
-    for (const f of rot) items.push(h('li', icon('warn', 24), `Same family as last season here (${f}). Rotate if you can.`));
+    for (const f of rot) items.push(h('li', icon('warn', 24), `You had ${familyName(f)} here last year too. Switching to something else keeps bugs and disease from building up.`));
     if (cap.pct > 1.05) {
       items.push(h('li', icon('warn', 24), `Crowded: ${Math.round(cap.pct * 100)}% of the bed by spacing.`));
       if (finished.length) {

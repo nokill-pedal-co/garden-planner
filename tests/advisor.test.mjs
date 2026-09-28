@@ -28,7 +28,7 @@ test('rotation after nightshades: avoid them, follow with legumes', () => {
   assert.deepEqual(a.rotation.avoid, ['solanaceae']);
   assert.equal(a.rotation.follow[0], 'legume');
   assert.ok(a.ideas.length && a.ideas.every(i => i.plant.family !== 'solanaceae'));
-  assert.ok(a.prep.some(p => /nightshade/i.test(p.title)));
+  assert.ok(a.prep.some(p => /tomato/i.test(p.title)));
   assert.ok(a.prep.some(p => /compost/i.test(p.title)));
   assert.ok(a.prep.some(p => /cover crop/i.test(p.title)), 'nothing staying -> cover crop');
 });
