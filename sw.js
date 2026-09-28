@@ -1,6 +1,6 @@
 // Offline support. App files: network-first (so updates land), falling back to cache.
 // CDN libraries, fonts and satellite tiles: cache-first. Supabase API calls: never cached.
-const VERSION = 'gp2-v11';
+const VERSION = 'gp2-v12';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/store.js', './js/sync.js', './js/config.js', './js/ui.js',

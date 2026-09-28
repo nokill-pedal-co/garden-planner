@@ -30,6 +30,7 @@ export function mount(main, bedId) {
     cat: 'all',
     q: '',
     placeAs: store.storage.get('gp2.placeAs', 'planted'),
+    placeQty: 1,          // how many plants the next tap places (in a row at their spacing)
     showDone: false,
   };
 
@@ -290,17 +291,24 @@ export function mount(main, bedId) {
       ui.armed = null;
       return;
     }
+    // One tap places one planting (of `placeQty` plants in a row), then the seed box disarms;
+    // use +1 on the selected plant, or pick it again, to add more.
     const plant = getPlant(ui.armed.plantKey, custom());
     const planted = ui.placeAs === 'planted';
     const byTransplant = plant.daysFrom === 'transplant';
+    const qty = isPot(bed) ? 1 : ui.placeQty;
+    const positions = unitPositions({ qty, x_ft: x, y_ft: y, positions: null }, bed, spacingFtOf(plant));
     const p = store.addPlanting({
-      bed_id: bed.id, plant_key: plant.key, x_ft: x, y_ft: y, positions: [[x, y]],
+      bed_id: bed.id, plant_key: plant.key, qty, x_ft: x, y_ft: y, positions,
       status: planted ? 'planted' : 'planned',
       method: plant.perennial ? 'perennial' : byTransplant ? 'transplant' : 'direct',
       sow_date: planted && !byTransplant ? today : null,
       transplant_date: planted && byTransplant ? today : null,
     });
     ui.selected = p.id;
+    ui.armed = null;
+    ui.placeQty = 1;
+    toast(`${qty > 1 ? `${qty} × ` : ''}${plant.name} placed`);
   }
 
   /** Add or remove one plant from a planting, keeping everyone else where they are. */
@@ -346,13 +354,14 @@ export function mount(main, bedId) {
       onclick: () => {
         ui.armed = ui.armed?.plantKey === p.key ? null : { plantKey: p.key };
         render();
-        if (ui.armed) toast(`Tap the soil to place ${p.name}`);
+        if (ui.armed) toast(`Tap the soil to place ${ui.placeQty > 1 ? `${ui.placeQty} × ` : ''}${p.name}`);
       },
     }, plantSprite(p.key, custom(), { size: 32, alt: '' }), p.name)));
   }
 
   function paletteCard() {
     let grid = paletteGrid();
+    const qtyOut = h('b.qty-out', { 'aria-live': 'polite' }, String(ui.placeQty));
     // Typing only swaps the results; rebuilding the input would reset the caret to the start.
     const search = h('input', { type: 'search', placeholder: 'Search…', value: ui.q, 'aria-label': 'Search plants',
       oninput: e => { ui.q = e.target.value; const next = paletteGrid(); grid.replaceWith(next); grid = next; } });
@@ -362,12 +371,17 @@ export function mount(main, bedId) {
           h('select', { style: { width: 'auto', minHeight: '32px' }, onchange: e => { ui.placeAs = e.target.value; store.storage.set('gp2.placeAs', ui.placeAs); } },
             h('option', { value: 'planted', selected: ui.placeAs === 'planted' }, 'Planted today'),
             h('option', { value: 'planned', selected: ui.placeAs === 'planned' }, 'Planned')))),
-      search,
+      h('div.row.wrap', { style: { gap: '6px' } },
+        search,
+        h('div.row.small', { role: 'group', 'aria-label': 'How many to place' }, 'How many',
+          h('button.btn.sm', { type: 'button', 'aria-label': 'Fewer', onclick: () => { ui.placeQty = Math.max(1, ui.placeQty - 1); qtyOut.textContent = ui.placeQty; } }, '−'),
+          qtyOut,
+          h('button.btn.sm', { type: 'button', 'aria-label': 'More', onclick: () => { ui.placeQty = Math.min(50, ui.placeQty + 1); qtyOut.textContent = ui.placeQty; } }, '+'))),
       h('div.cats',
         [['all', 'All'], ...CATEGORIES.map(c => [c.key, c.name])].map(([k, n]) =>
           h(`button.btn.sm${ui.cat === k ? '.primary' : ''}`, { type: 'button', onclick: () => { ui.cat = k; render(); } }, n))),
       grid,
-      ui.armed ? h('button.btn.sm', { onclick: () => { ui.armed = null; render(); } }, icon('close', 16), 'Stop placing') : null);
+      ui.armed ? h('button.btn.sm', { onclick: () => { ui.armed = null; render(); } }, icon('close', 16), 'Cancel') : null);
     return card;
   }
 
