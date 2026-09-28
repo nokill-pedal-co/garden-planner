@@ -20,8 +20,14 @@ test('imports the real v1 database', () => {
   const raised = beds.filter(b => b.kind === 'raised');
   assert.equal(raised.length, Object.keys(db.beds).length);
   assert.deepEqual([raised[0].length_ft, raised[0].width_ft], [6, 3]);
-  const total = Object.values(db.beds).concat(Object.values(db.containers)).reduce((n, b) => n + b.plants.length, 0);
-  assert.equal(plantings.length, total, 'one planting per v1 plant entry');
+  const all = Object.values(db.beds).concat(Object.values(db.containers)).flatMap(b => b.plants);
+  const plants = all.reduce((n, dp) => n + (dp.quantity || 1), 0);
+  assert.ok(plantings.length >= all.length, 'at least one planting per v1 plant entry');
+  assert.equal(plantings.reduce((n, p) => n + p.qty, 0), plants, 'every individual plant is kept');
+  const pots = beds.filter(b => b.kind === 'container');
+  assert.ok(pots.every(b => b.shape === 'round' && b.volume_gal > 0), 'pots are round with a gallon size');
+  assert.ok(!beds.some(b => /fabric pots|grow bags/i.test(b.name)), 'grouped pot entries are split into single pots');
+  assert.ok(pots.every(b => plantings.filter(p => p.bed_id === b.id).length >= 1));
   assert.deepEqual(report.unmatched, [], `unmatched: ${report.unmatched.join(', ')}`);
   for (const p of plantings) {
     assert.equal(p.garden_id, garden.id);
@@ -69,4 +75,30 @@ test('geo round-trips and bed geometry', () => {
   assert.ok(pointInPolygon([10, 5], c));
   const [gx, gy] = bedToGarden({ ...bed, rotation_deg: 0 }, 0, 0);
   assert.deepEqual([gx, gy], [7, 4]);
+});
+
+test('pot sizes, round outlines and per-plant row layout', async () => {
+  const { potDims, unitPositions, bedOutline, pointInPolygon } = await import('../js/geo.js');
+  assert.equal(potDims(5).diameter_ft, 1);            // 12" fabric pot
+  assert.ok(potDims(15).diameter_ft > potDims(5).diameter_ft);
+  assert.ok(potDims(12).diameter_ft > potDims(10).diameter_ft && potDims(12).diameter_ft < potDims(15).diameter_ft);
+  // 4 plants at 18" fill a 6 ft row exactly.
+  assert.deepEqual(unitPositions({ qty: 4, x_ft: 0.75, y_ft: 0.75 }, { length_ft: 6, width_ft: 3 }, 1.5),
+    [[0.75, 0.75], [2.25, 0.75], [3.75, 0.75], [5.25, 0.75]]);
+  // Saved positions win; missing ones are filled after them.
+  assert.deepEqual(unitPositions({ qty: 2, x_ft: 1, y_ft: 1, positions: [[4, 2]] }, { length_ft: 6, width_ft: 3 }, 1).length, 2);
+  const round = { shape: 'round', x_ft: 0, y_ft: 0, length_ft: 2, width_ft: 2 };
+  assert.ok(pointInPolygon([0.9, 0], bedOutline(round)));
+  assert.ok(!pointInPolygon([0.95, 0.95], bedOutline(round)), 'corner of the bounding square is outside a round pot');
+});
+
+test('Bed 8 imports as two rows of four at 18"', () => {
+  const { beds, plantings } = importV1(db);
+  const bed8 = beds.find(b => b.name === 'Bed 8');
+  if (!bed8) return;
+  for (const p of plantings.filter(p => p.bed_id === bed8.id)) {
+    assert.equal(p.positions.length, 4);
+    const xs = p.positions.map(u => u[0]);
+    assert.ok(xs[0] >= 0 && xs.at(-1) <= bed8.length_ft, `${p.variety} row fits: ${xs}`);
+  }
 });

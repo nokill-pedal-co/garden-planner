@@ -1,8 +1,8 @@
 // v1 -> v2 migration. Pure: takes the v1 garden-db.json (and optionally a v1 "Export" JSON with
 // hand-placed positions) and returns v2 rows { garden, beds, plantings } ready to upsert.
 
-import { findPlantByName, getPlant } from './plants.js';
-import { fromLatLng } from './geo.js';
+import { findPlantByName, getPlant, normalizeName } from './plants.js';
+import { fromLatLng, potDims, unitPositions } from './geo.js';
 
 // v1 map constants (index.html "MAP VIEW").
 const V1_LOT_CENTER = { lat: 45.55306, lng: -122.89049 };
@@ -73,8 +73,24 @@ function areaName(loc) {
 
 /** "Radish 'French Breakfast'" -> "French Breakfast", unless the plant's own name already says it. */
 function quotedVariety(name, plant) {
-  const v = /['‘’]([^'‘’]+)['‘’]/.exec(name)?.[1];
-  return v && !plant.name.toLowerCase().includes(v.toLowerCase()) ? v : null;
+  // Quoted cultivar, or else the whole name when it's a cultivar alias ("Grape Spritzer" -> cannabis).
+  const v = /['‘’]([^'‘’]+)['‘’]/.exec(name)?.[1] || name;
+  const nv = normalizeName(v), np = normalizeName(plant.name);
+  return nv && !np.includes(nv) && !nv.includes(np) ? v : null;
+}
+
+// Default pot sizes (gallons) by the v1 container type; editable per pot in the app.
+function potGallons(c) {
+  const t = (c.containerType || '').toLowerCase();
+  if (t.includes('terracotta')) return 3;
+  if (t.includes('fabric') || t.includes('grow bag')) return 5;
+  if (t === 'pot') return 15; // single fruit-tree pots
+  return 10;
+}
+
+/** v1 grouped several pots/bags under one entry ("Fabric Pots", "Grow Bags"): those become one pot per plant. */
+function isPotGroup(c) {
+  return /pots|bags/i.test(c.containerType || '');
 }
 
 function containerKind(c) {
@@ -103,11 +119,15 @@ function planSeason(container, fallback) {
 
 /** Spread plantings over a bed on a 1 ft (or 0.5 ft when crowded) lattice. */
 function autoLayout(bed, plantings) {
-  // A few multi-plant rows (e.g. 4 broccoli + 4 cauliflower): one centred row each.
+  // A few multi-plant rows (e.g. 4 broccoli + 4 cauliflower): one row each, plants at their real
+  // spacing, centred along the bed.
   if (plantings.length && plantings.length <= 3) {
     plantings.forEach((p, i) => {
-      p.x_ft = round2(bed.length_ft / 2);
+      const s = Math.max(1 / 6, (getPlant(p.plant_key).spacingIn || 12) / 12);
+      const span = ((p.qty || 1) - 1) * s;
+      p.x_ft = round2(span < bed.length_ft ? (bed.length_ft - span) / 2 : s / 2);
       p.y_ft = round2(((i + 0.5) * bed.width_ft) / plantings.length);
+      p.positions = unitPositions(p, bed, s);
     });
     return;
   }
@@ -164,19 +184,23 @@ export function importV1(db, exported = null, opts = {}) {
     const dims = src.dimensions || {};
     const isPot = kind === 'container';
     const pos = V1_MAP_POS[v1id] ? ft(fromLatLng(V1_LOT_CENTER, V1_MAP_POS[v1id].lat, V1_MAP_POS[v1id].lng)) : null;
+    const gal = isPot ? potGallons(src) : null;
+    const pot = isPot ? potDims(gal) : null;
     const bed = {
       id: uuid(),
       garden_id: garden.id,
       name: fixMojibake(src.name),
       kind,
       area: areaName(fixMojibake(src.location)),
-      length_ft: dims.length || (isPot ? 2 : 4),
-      width_ft: dims.width || (isPot ? 2 : 4),
-      height_ft: dims.height ?? null,
+      length_ft: pot ? pot.diameter_ft : dims.length || 4,
+      width_ft: pot ? pot.diameter_ft : dims.width || 4,
+      height_ft: pot ? pot.height_ft : dims.height ?? null,
+      shape: isPot || src.shape === 'round' ? 'round' : 'rect',
+      volume_gal: gal,
       x_ft: pos ? pos[0] : 0,
       y_ft: pos ? pos[1] : 0,
       rotation_deg: 0,
-      color: null,
+      color: /terracotta/i.test(src.containerType || '') ? '#ef7d57' : null,
       notes: [src.position && src.position !== 'TBD' ? fixMojibake(src.position) : null,
         src.structures ? fixMojibake(src.structures) : null].filter(Boolean).join('\n') || null,
       sort: sort++,
@@ -250,6 +274,18 @@ export function importV1(db, exported = null, opts = {}) {
     if (kind === 'plan') {
       const season = planSeason(c, year);
       c.plants.forEach(dp => addPlanting(dp, null, { planned: true, season }));
+      continue;
+    }
+    if (kind === 'container' && isPotGroup(c)) {
+      // One pot per plant: "Fabric Pots" with 2 pumpkins becomes two pumpkin pots.
+      c.plants.forEach((dp, k) => {
+        const qty = dp.quantity || 1;
+        for (let q = 0; q < qty; q++) {
+          const potName = `${fixMojibake(dp.name)}${qty > 1 ? ` #${q + 1}` : ''}`;
+          const bed = addBed(`${v1id}_${k}_${q}`, { ...c, name: potName, dimensions: null }, 'container');
+          autoLayout(bed, [addPlanting({ ...dp, quantity: 1 }, bed)]);
+        }
+      });
       continue;
     }
     const bed = addBed(v1id, c, kind);

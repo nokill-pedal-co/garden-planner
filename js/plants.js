@@ -313,7 +313,7 @@ crop('napa_cabbage', 'Napa Cabbage', 'brassicas', 'brassica', 'cabbage', {
     'early August for an October harvest.',
 });
 crop('broccoli', 'Broccoli', 'brassicas', 'brassica', 'broccoli', {
-  tint: { A: DKGREEN, B: GREEN }, days: 65, daysFrom: 'transplant', harvestDays: 30, spacingIn: 12,
+  tint: { A: DKGREEN, B: GREEN }, days: 65, daysFrom: 'transplant', harvestDays: 30, spacingIn: 18,
   hardiness: 'hardy',
   windows: { indoors: [-9, -6], transplant: [-4, 0], fall: [-15, -11] },
   companions: BRASSICA_COMPANIONS,

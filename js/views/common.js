@@ -4,6 +4,7 @@ import * as store from '../store.js';
 import { h, icon, plantSprite, sprite, sheet, field, select, formData, confirmSheet, toast } from '../ui.js';
 import { getPlant, allPlants, CATEGORIES } from '../plants.js';
 import { displayName, expectedHarvest, progress, todayStr, prettyDate, sowingWindows, addDays } from '../season.js';
+import { POT_SIZES, potDims } from '../geo.js';
 
 export const STATUS_LABELS = {
   planned: 'Planned', started: 'Started indoors', planted: 'In the ground',
@@ -21,30 +22,68 @@ function bedForm(bed, submitLabel) {
         e.preventDefault();
         const d = formData(form);
         if (!d.name) return toast('Give it a name', { error: true });
-        close({
-          name: d.name, kind: d.kind, area: d.area,
-          length_ft: clampPos(d.length_ft, 4), width_ft: clampPos(d.width_ft, 4), height_ft: d.height_ft,
-          notes: d.notes,
-        });
+        const out = { name: d.name, kind: d.kind, area: d.area, notes: d.notes, shape: d.shape || 'rect', volume_gal: null };
+        if (d.kind === 'container') {
+          // Pots are round and sized by their gallons.
+          const gal = Number(d.volume_gal) || 5;
+          const { diameter_ft, height_ft } = potDims(gal);
+          Object.assign(out, { shape: 'round', volume_gal: gal, length_ft: diameter_ft, width_ft: diameter_ft, height_ft });
+        } else if (out.shape === 'round') {
+          const dia = clampPos(d.length_ft, 3);
+          Object.assign(out, { length_ft: dia, width_ft: dia, height_ft: d.height_ft });
+        } else {
+          Object.assign(out, { length_ft: clampPos(d.length_ft, 4), width_ft: clampPos(d.width_ft, 4), height_ft: d.height_ft });
+        }
+        close(out);
       },
-    },
-    h('header', sprite('icon_bed', { size: 48 }), h('h2', bed.id ? 'Edit bed' : 'New bed')),
-    field('Name', h('input', { type: 'text', name: 'name', value: bed.name || '', required: true, autofocus: true })),
-    h('div.grid2',
-      field('Kind', select(Object.entries(KIND_LABELS), bed.kind || 'raised', { name: 'kind' })),
-      field('Area', h('input', { type: 'text', name: 'area', value: bed.area || '', placeholder: 'Backyard', list: 'areas' })),
-      field('Length (ft)', h('input', { type: 'number', name: 'length_ft', value: bed.length_ft ?? 4, min: 0.5, step: 0.5 })),
-      field('Width (ft)', h('input', { type: 'number', name: 'width_ft', value: bed.width_ft ?? 4, min: 0.5, step: 0.5 })),
-      field('Height (ft)', h('input', { type: 'number', name: 'height_ft', value: bed.height_ft ?? '', min: 0, step: 0.25 })),
-    ),
-    h('datalist', { id: 'areas' }, [...new Set(store.getState().beds.map(b => b.area).filter(Boolean))].map(a => h('option', { value: a }))),
-    field('Notes', h('textarea', { name: 'notes' }, bed.notes || '')),
-    h('div.actions',
-      h('button.btn.primary', { type: 'submit' }, submitLabel),
-      bed.id ? h('button.btn.danger', { type: 'button', onclick: () => close('delete') }, icon('trash', 16), 'Delete') : null,
-      h('button.btn', { type: 'button', onclick: () => close(null) }, 'Cancel')));
+    });
+
+    const kind = select(Object.entries(KIND_LABELS), bed.kind || 'raised', { name: 'kind', onchange: sync });
+    const shape = select([['rect', 'Rectangle'], ['round', 'Round']], bed.shape || 'rect', { name: 'shape', onchange: sync });
+    const gallons = select(POT_SIZES.map(([g, d]) => [String(g), `${g} gal (${d}" across)`]),
+      String(bed.volume_gal || nearestGallons(bed) || 5), { name: 'volume_gal' });
+    const lengthLabel = h('span', 'Length (ft)');
+    const potFields = h('div.grid2', field('Pot size', gallons));
+    const shapeField = field('Shape', shape);
+    const lengthField = h('label.field', lengthLabel, h('input', { type: 'number', name: 'length_ft', value: bed.length_ft ?? 4, min: 0.25, step: 'any' }));
+    const widthField = field('Width (ft)', h('input', { type: 'number', name: 'width_ft', value: bed.width_ft ?? 4, min: 0.25, step: 'any' }));
+    const heightField = field('Height (ft)', h('input', { type: 'number', name: 'height_ft', value: bed.height_ft ?? '', min: 0, step: 'any' }));
+
+    // Show the size inputs that make sense for the kind/shape picked.
+    function sync() {
+      const pot = kind.value === 'container';
+      const round = !pot && shape.value === 'round';
+      potFields.hidden = !pot;
+      shapeField.hidden = pot;
+      lengthField.hidden = heightField.hidden = pot;
+      widthField.hidden = pot || round;
+      lengthLabel.textContent = round ? 'Diameter (ft)' : 'Length (ft)';
+    }
+
+    form.append(
+      h('header', sprite('icon_bed', { size: 48 }), h('h2', bed.id ? `Edit ${bed.name}` : 'New bed')),
+      field('Name', h('input', { type: 'text', name: 'name', value: bed.name || '', required: true, autofocus: true })),
+      h('div.grid2',
+        field('Kind', kind),
+        field('Area', h('input', { type: 'text', name: 'area', value: bed.area || '', placeholder: 'Backyard', list: 'areas' })),
+        shapeField, lengthField, widthField, heightField),
+      potFields,
+      h('datalist', { id: 'areas' }, [...new Set(store.getState().beds.map(b => b.area).filter(Boolean))].map(a => h('option', { value: a }))),
+      field('Notes', h('textarea', { name: 'notes' }, bed.notes || '')),
+      h('div.actions',
+        h('button.btn.primary', { type: 'submit' }, submitLabel),
+        bed.id ? h('button.btn.danger', { type: 'button', onclick: () => close('delete') }, icon('trash', 16), 'Delete') : null,
+        h('button.btn', { type: 'button', onclick: () => close(null) }, 'Cancel')));
+    sync();
     return form;
   };
+}
+
+/** Best-guess gallons for an existing pot that has none recorded, from its diameter. */
+function nearestGallons(bed) {
+  if (bed.kind !== 'container' || !bed.length_ft) return null;
+  const inches = bed.length_ft * 12;
+  return POT_SIZES.reduce((best, [g, d]) => (Math.abs(d - inches) < Math.abs(best[1] - inches) ? [g, d] : best))[0];
 }
 
 function clampPos(n, fallback) {
@@ -103,9 +142,9 @@ export function structureSheet(s = null) {
       })),
       field('Label', h('input', { type: 'text', name: 'name', value: s?.name || '', placeholder: 'House' })),
       // Footprint outlines (from OpenStreetMap) keep their real shape: move/rotate only.
-      s?.points?.length ? h('input', { type: 'hidden', name: 'w', value: s.w }) : field('Length (ft)', h('input', { type: 'number', name: 'w', value: s?.w ?? 40, min: 1, step: 0.5 })),
-      s?.points?.length ? h('input', { type: 'hidden', name: 'h', value: s.h }) : field('Width (ft)', h('input', { type: 'number', name: 'h', value: s?.h ?? 30, min: 1, step: 0.5 })),
-      field('Rotation (°)', h('input', { type: 'number', name: 'rotation', value: s?.rotation ?? 0, step: 1 })),
+      s?.points?.length ? h('input', { type: 'hidden', name: 'w', value: s.w }) : field('Length (ft)', h('input', { type: 'number', name: 'w', value: s?.w ?? 40, min: 1, step: 'any' })),
+      s?.points?.length ? h('input', { type: 'hidden', name: 'h', value: s.h }) : field('Width (ft)', h('input', { type: 'number', name: 'h', value: s?.h ?? 30, min: 1, step: 'any' })),
+      field('Rotation (°)', h('input', { type: 'number', name: 'rotation', value: s?.rotation ?? 0, step: 'any' })),
     ),
     h('p.small.muted', s?.points?.length
       ? 'This is a real building outline, so its shape stays fixed. Select it in the yard and drag to move it.'
@@ -139,7 +178,7 @@ export async function plantingSheet(planting) {
           bed_id: d.bed_id, season: d.season || planting.season,
           sow_date: d.sow_date, transplant_date: d.transplant_date, expected_harvest: d.expected_harvest,
           done_date: d.done_date, source: d.source, notes: d.notes, locked: d.locked,
-          ...(d.bed_id !== planting.bed_id ? { x_ft: null, y_ft: null } : {}),
+          ...(d.bed_id !== planting.bed_id ? { x_ft: null, y_ft: null, positions: null } : {}),
         } });
       },
     },
@@ -179,7 +218,7 @@ export async function plantingSheet(planting) {
     await harvestSheet(planting);
   } else if (res.action === 'duplicate') {
     const { id, created_at, updated_at, ...rest } = planting;
-    store.addPlanting({ ...rest, x_ft: planting.x_ft != null ? planting.x_ft + 0.5 : null, locked: false });
+    store.addPlanting({ ...rest, x_ft: planting.x_ft != null ? planting.x_ft + 0.5 : null, positions: null, locked: false });
     toast('Duplicated');
   } else if (res.action === 'delete') {
     if (await confirmSheet(`Delete ${displayName(planting, plant)}?`, { ok: 'Delete', danger: true })) store.deletePlanting(planting.id);

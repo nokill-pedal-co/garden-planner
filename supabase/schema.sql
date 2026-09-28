@@ -54,6 +54,12 @@ create table if not exists public.beds (
 
 -- Added after launch: pin a bed so a stray drag in the yard can't move it.
 alter table public.beds add column if not exists locked boolean not null default false;
+-- Round beds / pots (length_ft = width_ft = diameter) and pot size in gallons.
+alter table public.beds add column if not exists shape text not null default 'rect';
+alter table public.beds add column if not exists volume_gal real;
+do $$ begin
+  alter table public.beds add constraint beds_shape_check check (shape in ('rect','round'));
+exception when duplicate_object then null; end $$;
 
 create table if not exists public.plantings (
   id               uuid primary key default gen_random_uuid(),
@@ -78,6 +84,10 @@ create table if not exists public.plantings (
   created_at       timestamptz not null default now(),
   updated_at       timestamptz not null default now()
 );
+
+-- Where each individual plant of a planting sits in its bed: [[x_ft, y_ft], ...], length = qty.
+-- NULL means "lay them out in a row from (x_ft, y_ft) at the plant's spacing".
+alter table public.plantings add column if not exists positions jsonb;
 
 create table if not exists public.events (
   id          uuid primary key default gen_random_uuid(),

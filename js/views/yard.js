@@ -10,7 +10,8 @@ import * as store from '../store.js';
 import { h, icon, fill, toast } from '../ui.js';
 import { spriteCanvas } from '../sprites.js';
 import { getPlant } from '../plants.js';
-import { bedCorners, structureCorners, scaleStructure, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng, rotate } from '../geo.js';
+import { bedCorners, bedOutline, structureCorners, scaleStructure, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng, rotate, unitPositions } from '../geo.js';
+import { spacingFtOf } from './bed.js';
 import { editBedSheet, newBedSheet, structureSheet, STRUCTURE_KINDS } from './common.js';
 import { progress, todayStr } from '../season.js';
 
@@ -22,7 +23,7 @@ const SLOP_PX = 6;                               // CSS px of movement before a 
 const TILE_URL = (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
 
 const COLORS = {
-  outside: '#2a7a48', lotLine: '#1a1c2c', wood: '#b07a4a', pot: '#ef7d57', soil: '#4a2f25',
+  outside: '#2a7a48', lotLine: '#1a1c2c', wood: '#b07a4a', pot: '#3b4a63', soil: '#4a2f25',
   ink: '#1a1c2c', select: '#ffcd75', label: '#f4f4f4', lock: '#94b0c2',
 };
 
@@ -72,14 +73,14 @@ export function mount(main) {
     if (sel.type === 'bed') return state().beds.find(b => b.id === sel.id) || null;
     return structures().find(s => s.id === sel.id) || null;
   };
-  const cornersOf = (type, it) => (type === 'bed' ? bedCorners(it) : structureCorners(it));
+  const cornersOf = (type, it) => (type === 'bed' ? bedOutline(it) : structureCorners(it));
   const posOf = (type, it) => (type === 'bed' ? [it.x_ft, it.y_ft] : [it.x, it.y]);
   const rotOf = (type, it) => (type === 'bed' ? it.rotation_deg || 0 : it.rotation || 0);
 
   function hitItem([x, y]) {
     const beds = visibleBeds();
     for (let i = beds.length - 1; i >= 0; i--) {
-      if (pointInPolygon([x, y], bedCorners(beds[i]))) return { type: 'bed', id: beds[i].id };
+      if (pointInPolygon([x, y], bedOutline(beds[i]))) return { type: 'bed', id: beds[i].id };
     }
     const ss = structures();
     for (let i = ss.length - 1; i >= 0; i--) {
@@ -291,10 +292,12 @@ export function mount(main) {
   }
 
   function drawBed(bed) {
-    const corners = bedCorners(bed);
-    const frame = Math.max(1, Math.round(0.25 * ppf()));
+    const corners = bedOutline(bed);
+    const pot = bed.kind === 'container';
+    // Pots get a thinner rim than timber beds.
+    const frame = Math.max(1, Math.round((pot ? 0.1 : 0.25) * ppf()));
     path(corners);
-    ctx.fillStyle = bed.kind === 'container' ? COLORS.pot : bed.kind === 'ground' ? COLORS.soil : COLORS.wood;
+    ctx.fillStyle = bed.color || (pot ? COLORS.pot : bed.kind === 'ground' ? COLORS.soil : COLORS.wood);
     ctx.fill();
     ctx.strokeStyle = COLORS.ink;
     ctx.lineWidth = 1;
@@ -302,7 +305,7 @@ export function mount(main) {
     if (bed.kind === 'ground') return;
     // Soil: an inset copy of the bed.
     const inset = { ...bed, length_ft: Math.max(0.1, bed.length_ft - (2 * frame) / ppf()), width_ft: Math.max(0.1, bed.width_ft - (2 * frame) / ppf()) };
-    path(bedCorners(inset));
+    path(bedOutline(inset));
     ctx.fillStyle = worldPattern('tile_soil');
     ctx.fill();
   }
@@ -313,24 +316,27 @@ export function mount(main) {
     for (const p of state().plantings) {
       if (p.bed_id !== bed.id || p.x_ft == null || ['done', 'failed'].includes(p.status)) continue;
       const plant = getPlant(p.plant_key, custom);
-      const [x, y] = bedToGarden(bed, p.x_ft, p.y_ft);
-      const [sx, sy] = toScreen(x, y);
-      if (!size) {
-        ctx.fillStyle = plant.tint?.A || '#38b764';
-        ctx.fillRect(sx - 1, sy - 1, 2, 2);
-        continue;
-      }
       const pr = progress(p, plant, today);
       const key = pr.stage === 'started' ? 'seedling' : plant.sprite;
-      ctx.globalAlpha = p.status === 'planned' ? 0.5 : 1;
-      ctx.drawImage(spr(key, plant.tint), sx - size / 2, sy - size / 2, size, size);
-      ctx.globalAlpha = 1;
+      for (const [ux, uy] of unitPositions(p, bed, spacingFtOf(plant))) {
+        const [sx, sy] = toScreen(...bedToGarden(bed, ux, uy));
+        if (!size) {
+          ctx.fillStyle = plant.tint?.A || '#38b764';
+          ctx.fillRect(sx - 1, sy - 1, 2, 2);
+          continue;
+        }
+        ctx.globalAlpha = p.status === 'planned' ? 0.5 : 1;
+        ctx.drawImage(spr(key, plant.tint), sx - size / 2, sy - size / 2, size, size);
+        ctx.globalAlpha = 1;
+      }
     }
   }
 
   function drawLabel(bed) {
     if (ppf() < 4) return;
-    const b = bbox(bedCorners(bed));
+    // Pots sit close together; their names would pile up, so only the selected pot is labelled.
+    if (bed.kind === 'container' && !(selected?.type === 'bed' && selected.id === bed.id)) return;
+    const b = bbox(bedOutline(bed));
     const [cx] = toScreen((b.minX + b.maxX) / 2, 0);
     const [, top] = toScreen(0, b.minY);
     text(`${bed.locked ? '* ' : ''}${bed.name.toUpperCase()}`, cx, top - 5, COLORS.label, COLORS.ink);

@@ -1,5 +1,6 @@
-// Bed editor: a wood-framed soil plot with a 1 ft grid. Pick a plant from the palette (or the
-// unplaced tray), tap the soil to place it; drag plants to move them; tap one for details.
+// Bed editor: a wood-framed soil plot (round for pots) with light 6" guides. Pick a plant from the
+// seed box (or the unplaced tray) and tap the soil to place it. Every individual plant is drawn at
+// its real spacing and can be dragged on its own; tap one to select its planting.
 
 import * as store from '../store.js';
 import { h, icon, plantSprite, sprite, clear, toast, confirmSheet } from '../ui.js';
@@ -8,11 +9,15 @@ import { getPlant, allPlants, CATEGORIES } from '../plants.js';
 import {
   progress, displayName, todayStr, companionIssues, rotationIssues, bedCapacity, expectedHarvest, prettyDate,
 } from '../season.js';
+import { unitPositions } from '../geo.js';
 import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, STATUS_LABELS } from './common.js';
 import { fmtFt } from './yard.js';
 
 const LAST_BED = 'gp2.lastBed';
-const SNAP = 0.25; // ft
+const SNAP = 1 / 12;   // ft: placement snaps to the inch, i.e. effectively free
+const KEY_STEP = 0.25; // ft per arrow-key press
+
+export const spacingFtOf = plant => Math.max(1 / 6, (plant.spacingIn || 12) / 12);
 
 export function mount(main, bedId) {
   const view = h('div.view');
@@ -38,7 +43,6 @@ export function mount(main, bedId) {
 
   // ---------------------------------------------------------- render
 
-  let stageEls = null; // live refs for drag without full re-render
   let dragging = false; // suppress re-renders mid-drag (they'd drop pointer capture)
 
   function render() {
@@ -53,23 +57,27 @@ export function mount(main, bedId) {
     store.storage.set(LAST_BED, bed.id);
     const season = Number(todayStr().slice(0, 4));
     const plantings = state().plantings.filter(p => p.bed_id === bed.id && (ui.showDone || !['done', 'failed'].includes(p.status)));
+    const plants = plantings.reduce((n, p) => n + (p.qty || 1), 0);
     const cap = bedCapacity(bed, state().plantings, custom());
     const issues = companionIssues(plantings, custom());
     const rot = rotationIssues(bed, state().plantings, season, custom());
+    const size = bed.shape === 'round'
+      ? `${fmtFt(bed.length_ft)} round${bed.volume_gal ? ` · ${bed.volume_gal} gal` : ''}`
+      : `${fmtFt(bed.length_ft)} × ${fmtFt(bed.width_ft)}${bed.height_ft ? ` × ${fmtFt(bed.height_ft)}` : ''}`;
 
     view.append(
       h('div.bed-head',
         h('div.grow',
           h('h1', bed.name),
-          h('div.small.muted', `${fmtFt(bed.length_ft)} × ${fmtFt(bed.width_ft)}${bed.height_ft ? ` × ${fmtFt(bed.height_ft)}` : ''} · ${bed.area || 'No area'} · ${plantings.length} planting${plantings.length === 1 ? '' : 's'}`)),
+          h('div.small.muted', `${size} · ${bed.area || 'No area'} · ${plants} plant${plants === 1 ? '' : 's'}`)),
         h('div', { style: { width: '220px' } },
-          h('div.small.muted', `Space used ${Math.round(cap.usedSqFt)} / ${Math.round(cap.areaSqFt)} sq ft`),
+          h('div.small.muted', `Space used ${Math.round(cap.usedSqFt * 10) / 10} / ${Math.round(cap.areaSqFt * 10) / 10} sq ft`),
           h(`div.meter${cap.pct > 1 ? '.over' : ''}`, h('i', { style: { width: `${Math.min(100, Math.round(cap.pct * 100))}%` } }), h('b', `${Math.round(cap.pct * 100)}%`))),
         h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), 'Edit bed'),
       ),
       h('div.bed-layout',
         h('div.stack', stage(bed, plantings, issues), issuesCard(issues, rot, cap)),
-        h('div.stack', selectedCard(), paletteCard(), trayCard(season)),
+        h('div.stack', selectedCard(bed), paletteCard(), trayCard(season)),
       ),
     );
   }
@@ -86,12 +94,12 @@ export function mount(main, bedId) {
   // ---------------------------------------------------------- stage
 
   function stage(bed, plantings, issues) {
-    const wrap = h(`div.bed-stage${bed.kind === 'container' ? '.container-kind' : ''}.px.flat`);
-    const soil = h(`div.bed-soil${ui.armed ? '.arming' : ''}`, { tabindex: 0, 'aria-label': `${bed.name} soil. ${ui.armed ? 'Tap to place.' : ''}` });
+    const round = bed.shape === 'round';
+    const wrap = h(`div.bed-stage${bed.kind === 'container' ? '.container-kind' : ''}${round ? '.round' : ''}.px.flat`);
+    const soil = h(`div.bed-soil${ui.armed ? '.arming' : ''}${round ? '.round' : ''}`, { tabindex: 0, 'aria-label': `${bed.name} soil. ${ui.armed ? 'Tap to place.' : ''}` });
     const grid = h('div.grid');
     soil.append(grid);
     wrap.append(soil);
-
     // Size after layout so we know the width available.
     requestAnimationFrame(() => layout(bed, wrap, soil, grid, plantings, issues));
     return wrap;
@@ -100,53 +108,70 @@ export function mount(main, bedId) {
   function layout(bed, wrap, soil, grid, plantings, issues) {
     const avail = wrap.clientWidth - 36;
     const maxH = Math.max(180, innerHeight * 0.55);
-    const ppf = Math.max(20, Math.min(140, Math.floor(Math.min(avail / bed.length_ft, maxH / bed.width_ft))));
+    const ppf = Math.max(20, Math.min(160, Math.floor(Math.min(avail / bed.length_ft, maxH / bed.width_ft))));
     const W = Math.round(bed.length_ft * ppf), H = Math.round(bed.width_ft * ppf);
     Object.assign(soil.style, {
       width: `${W}px`, height: `${H}px`,
       backgroundImage: `url(${spriteURL('tile_soil')})`, backgroundSize: '48px 48px',
     });
+    // Guides: faint every 6", a little stronger every foot. They're only guides; placement is free.
+    const half = ppf / 2;
     Object.assign(grid.style, {
-      backgroundImage: `linear-gradient(to right, rgba(242,230,201,.8) 2px, transparent 2px), linear-gradient(to bottom, rgba(242,230,201,.8) 2px, transparent 2px)`,
-      backgroundSize: `${ppf}px ${ppf}px`,
+      backgroundImage: [
+        'linear-gradient(to right, rgba(242,230,201,.55) 1px, transparent 1px)',
+        'linear-gradient(to bottom, rgba(242,230,201,.55) 1px, transparent 1px)',
+        'linear-gradient(to right, rgba(242,230,201,.22) 1px, transparent 1px)',
+        'linear-gradient(to bottom, rgba(242,230,201,.22) 1px, transparent 1px)',
+      ].join(','),
+      backgroundSize: `${ppf}px ${ppf}px, ${ppf}px ${ppf}px, ${half}px ${half}px, ${half}px ${half}px`,
     });
 
     const clash = new Set(), friend = new Set();
     for (const i of issues) for (const p of [i.a, i.b]) (i.kind === 'avoid' ? clash : friend).add(p.id);
 
     const today = todayStr();
-    const els = new Map();
+    let focusEl = null;
     for (const p of plantings) {
       if (p.x_ft == null) continue;
-      const el = plantEl(p, ppf, today, clash.has(p.id), friend.has(p.id));
-      soil.append(el);
-      els.set(p.id, el);
+      const plant = getPlant(p.plant_key, custom());
+      const units = unitPositions(p, bed, spacingFtOf(plant));
+      units.forEach(([x, y], i) => {
+        const el = plantEl(p, plant, i, x, y, ppf, today, clash.has(p.id), friend.has(p.id));
+        soil.append(el);
+        if (ui.selected === p.id && i === 0) focusEl = el;
+      });
     }
-    stageEls = { bed, soil, ppf, els };
-    if (ui.refocus) { ui.refocus = false; els.get(ui.selected)?.focus(); }
+    if (ui.refocus) { ui.refocus = false; focusEl?.focus(); }
     bindSoil(bed, soil, ppf);
   }
 
-  function plantEl(p, ppf, today, isClash, isFriend) {
-    const plant = getPlant(p.plant_key, custom());
+  function plantEl(p, plant, i, x, y, ppf, today, isClash, isFriend) {
     const pr = progress(p, plant, today);
-    const spacingFt = Math.max(0.25, (plant.spacingIn || 12) / 12);
-    const size = Math.max(32, Math.round((ppf * Math.min(1.5, Math.max(0.5, spacingFt))) / 16) * 16);
+    const spacingFt = spacingFtOf(plant);
+    // Sprite fills the plant's spacing footprint (in 8px steps so the pixels stay even).
+    const size = Math.max(24, Math.min(2 * ppf, Math.floor((spacingFt * ppf) / 8) * 8));
     const cls = ['plant', p.status === 'planned' && 'planned', ui.selected === p.id && 'selected', pr.stage === 'ready' && 'ready',
       isClash && 'clash', !isClash && isFriend && 'friend', p.locked && 'locked'].filter(Boolean).join('.');
     const key = pr.stage === 'started' ? 'seedling' : plant.sprite;
-    const el = h(`div.${cls}`, {
-      role: 'button', tabindex: 0,
-      'aria-label': `${displayName(p, plant)}, ${STATUS_LABELS[p.status]}${p.qty > 1 ? `, ${p.qty} plants` : ''}`,
-      title: displayName(p, plant),
-      dataset: { id: p.id },
-      style: { left: `${p.x_ft * ppf}px`, top: `${p.y_ft * ppf}px`, width: `${size}px`, height: `${size}px` },
+    const n = p.qty || 1;
+    return h(`div.${cls}`, {
+      role: 'button', tabindex: i === 0 ? 0 : -1,
+      'aria-label': `${displayName(p, plant)}${n > 1 ? ` (${i + 1} of ${n})` : ''}, ${STATUS_LABELS[p.status]}`,
+      title: `${displayName(p, plant)}${n > 1 ? ` · ${i + 1}/${n}` : ''}`,
+      dataset: { id: p.id, i: String(i) },
+      style: { left: `${x * ppf}px`, top: `${y * ppf}px`, width: `${size}px`, height: `${size}px` },
     },
     ui.selected === p.id ? h('i.ring', { style: { width: `${spacingFt * ppf}px`, height: `${spacingFt * ppf}px` } }) : null,
     h('img', { src: spriteURL(key, plant.tint), alt: '' }),
-    p.qty > 1 ? h('span.qty', `×${p.qty}`) : null,
     pr.stage === 'ready' ? h('i.spark') : null);
-    return el;
+  }
+
+  /** Move the i-th plant of planting p to (x, y), saving the full position list. */
+  function moveUnit(bed, p, i, x, y) {
+    const plant = getPlant(p.plant_key, custom());
+    const units = unitPositions(p, bed, spacingFtOf(plant)).map(u => [...u]);
+    units[i] = [x, y];
+    store.updatePlanting(p.id, { positions: units, x_ft: units[0][0], y_ft: units[0][1] });
   }
 
   function bindSoil(bed, soil, ppf) {
@@ -162,7 +187,7 @@ export function mount(main, bedId) {
         const p = state().plantings.find(x => x.id === el.dataset.id);
         if (!p) return;
         e.preventDefault();
-        drag = { id: p.id, el, sx: e.clientX, sy: e.clientY, moved: false, locked: p.locked };
+        drag = { id: p.id, i: Number(el.dataset.i), el, sx: e.clientX, sy: e.clientY, moved: false, locked: p.locked };
         dragging = true;
         try { soil.setPointerCapture(e.pointerId); } catch { /* synthetic or already-released pointer */ }
         return;
@@ -173,7 +198,7 @@ export function mount(main, bedId) {
 
     soil.addEventListener('pointermove', e => {
       if (!drag || drag.locked) return;
-      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < 5) return;
+      if (!drag.moved && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < (e.pointerType === 'touch' ? 8 : 4)) return;
       drag.moved = true;
       const [x, y] = toFt(e).map(snap);
       drag.x = x; drag.y = y;
@@ -186,12 +211,13 @@ export function mount(main, bedId) {
       const d = drag;
       drag = null;
       dragging = false;
+      const p = state().plantings.find(x => x.id === d.id);
+      if (!p) return render();
       if (d.moved && !d.locked) {
-        store.updatePlanting(d.id, { x_ft: d.x, y_ft: d.y });
         ui.selected = d.id;
+        moveUnit(bed, p, d.i, d.x, d.y);
       } else if (ui.selected === d.id) {
-        const p = state().plantings.find(x => x.id === d.id);
-        if (p) plantingSheet(p);
+        plantingSheet(p);
       } else {
         ui.selected = d.id;
         render();
@@ -209,11 +235,15 @@ export function mount(main, bedId) {
       const p = state().plantings.find(x => x.id === ui.selected);
       if (e.key === 'Escape') { ui.armed = null; ui.selected = null; return render(); }
       if (!p) return;
-      const step = { ArrowLeft: [-SNAP, 0], ArrowRight: [SNAP, 0], ArrowUp: [0, -SNAP], ArrowDown: [0, SNAP] }[e.key];
+      const step = { ArrowLeft: [-KEY_STEP, 0], ArrowRight: [KEY_STEP, 0], ArrowUp: [0, -KEY_STEP], ArrowDown: [0, KEY_STEP] }[e.key];
       if (step && !p.locked) {
+        // Arrow keys nudge the whole planting (every plant in it).
         e.preventDefault();
         ui.refocus = true;
-        store.updatePlanting(p.id, { x_ft: clampTo(p.x_ft + step[0], bed.length_ft), y_ft: clampTo(p.y_ft + step[1], bed.width_ft) });
+        const plant = getPlant(p.plant_key, custom());
+        const units = unitPositions(p, bed, spacingFtOf(plant))
+          .map(([x, y]) => [clampTo(x + step[0], bed.length_ft), clampTo(y + step[1], bed.width_ft)]);
+        store.updatePlanting(p.id, { positions: units, x_ft: units[0][0], y_ft: units[0][1] });
       } else if (e.key === 'Enter') {
         plantingSheet(p);
       }
@@ -229,8 +259,12 @@ export function mount(main, bedId) {
     [x, y] = [snap(x), snap(y)];
     const today = todayStr();
     if (ui.armed.plantingId) {
-      store.updatePlanting(ui.armed.plantingId, { bed_id: bed.id, x_ft: x, y_ft: y });
-      ui.selected = ui.armed.plantingId;
+      // A planting from the tray: its plants go in a row starting where you tapped.
+      const p = state().plantings.find(q => q.id === ui.armed.plantingId);
+      const plant = getPlant(p.plant_key, custom());
+      const units = unitPositions({ ...p, x_ft: x, y_ft: y, positions: null }, bed, spacingFtOf(plant));
+      store.updatePlanting(p.id, { bed_id: bed.id, x_ft: x, y_ft: y, positions: units });
+      ui.selected = p.id;
       ui.armed = null;
       return;
     }
@@ -238,7 +272,7 @@ export function mount(main, bedId) {
     const planted = ui.placeAs === 'planted';
     const byTransplant = plant.daysFrom === 'transplant';
     const p = store.addPlanting({
-      bed_id: bed.id, plant_key: plant.key, x_ft: x, y_ft: y,
+      bed_id: bed.id, plant_key: plant.key, x_ft: x, y_ft: y, positions: [[x, y]],
       status: planted ? 'planted' : 'planned',
       method: plant.perennial ? 'perennial' : byTransplant ? 'transplant' : 'direct',
       sow_date: planted && !byTransplant ? today : null,
@@ -247,9 +281,18 @@ export function mount(main, bedId) {
     ui.selected = p.id;
   }
 
+  /** Add or remove one plant from a planting, keeping everyone else where they are. */
+  function changeQty(bed, p, delta) {
+    const plant = getPlant(p.plant_key, custom());
+    const units = unitPositions(p, bed, spacingFtOf(plant));
+    const qty = Math.max(1, (p.qty || 1) + delta);
+    const next = delta > 0 ? unitPositions({ ...p, qty, positions: units }, bed, spacingFtOf(plant)) : units.slice(0, qty);
+    store.updatePlanting(p.id, { qty, positions: next });
+  }
+
   // ---------------------------------------------------------- side panel
 
-  function selectedCard() {
+  function selectedCard(bed) {
     const p = state().plantings.find(x => x.id === ui.selected);
     if (!p) return null;
     const plant = getPlant(p.plant_key, custom());
@@ -263,10 +306,10 @@ export function mount(main, bedId) {
       h('div.row.wrap', { style: { marginTop: '8px' } },
         h('button.btn.sm.primary', { onclick: () => plantingSheet(p) }, icon('edit', 16), 'Details'),
         h('button.btn.sm.warn', { onclick: () => harvestSheet(p) }, icon('basket', 16), 'Harvest'),
-        h('button.btn.sm', { onclick: () => store.updatePlanting(p.id, { qty: p.qty + 1 }) }, '+1'),
-        p.qty > 1 ? h('button.btn.sm', { onclick: () => store.updatePlanting(p.id, { qty: p.qty - 1 }) }, '−1') : null,
+        h('button.btn.sm', { title: 'Add one more plant', onclick: () => changeQty(bed, p, 1) }, '+1'),
+        p.qty > 1 ? h('button.btn.sm', { title: 'Remove the last plant', onclick: () => changeQty(bed, p, -1) }, '−1') : null,
         h('button.btn.sm', { onclick: () => store.updatePlanting(p.id, { locked: !p.locked }) }, icon(p.locked ? 'lock' : 'unlock', 16), p.locked ? 'Locked' : 'Lock'),
-        h('button.btn.sm', { title: 'Move to unplaced tray', onclick: () => { store.updatePlanting(p.id, { bed_id: null, x_ft: null, y_ft: null }); ui.selected = null; } }, 'Unplace'),
+        h('button.btn.sm', { title: 'Move to unplaced tray', onclick: () => { store.updatePlanting(p.id, { bed_id: null, x_ft: null, y_ft: null, positions: null }); ui.selected = null; } }, 'Unplace'),
         h('button.btn.sm.danger', { 'aria-label': 'Delete planting', onclick: async () => {
           if (await confirmSheet(`Delete ${displayName(p, plant)}?`, { ok: 'Delete', danger: true })) { store.deletePlanting(p.id); ui.selected = null; }
         } }, icon('trash', 16))));
@@ -349,7 +392,7 @@ export function mount(main, bedId) {
 }
 
 function snap(v) {
-  return Math.round(v / SNAP) * SNAP;
+  return Math.round(Math.round(v / SNAP) * SNAP * 100) / 100;
 }
 
 function clampTo(v, max) {

@@ -320,7 +320,9 @@ input[type="range"] { accent-color: var(--green); }
 @media (min-width: 1000px) { .bed-layout { grid-template-columns: 1fr 320px; } }
 
 .bed-stage { position: relative; padding: 18px; background: var(--wood); margin: 3px 9px 9px 3px; }
-.bed-stage.container-kind { background: var(--wood-dark); }
+.bed-stage.container-kind { background: #3b4a63; }
+.bed-stage.round { border-radius: 50%; padding: 14px; }
+.bed-soil.round { border-radius: 50%; }
 .bed-soil {
   position: relative;
   image-rendering: pixelated;

@@ -209,7 +209,7 @@ export function addBed(fields) {
   return commit('beds', {
     id: uuid(), garden_id: state.garden.id, name: 'New bed', kind: 'raised', area: null,
     length_ft: 4, width_ft: 4, height_ft: 1, x_ft: 0, y_ft: 0, rotation_deg: 0,
-    color: null, notes: null, sort: maxSort + 1, archived: false, locked: false,
+    color: null, notes: null, sort: maxSort + 1, archived: false, locked: false, shape: 'rect', volume_gal: null,
     ...fields,
   });
 }
@@ -223,7 +223,7 @@ export function updateBed(id, patch) {
 export function deleteBed(id) {
   // Plantings survive as unplaced (matches ON DELETE SET NULL server-side).
   for (const p of state.plantings.filter(p => p.bed_id === id)) {
-    commit('plantings', { ...p, bed_id: null, x_ft: null, y_ft: null });
+    commit('plantings', { ...p, bed_id: null, x_ft: null, y_ft: null, positions: null });
   }
   remove('beds', id);
 }
@@ -235,7 +235,7 @@ export function addPlanting(fields) {
     id: uuid(), garden_id: state.garden.id, bed_id: null, plant_key: 'unknown', variety: null,
     qty: 1, x_ft: null, y_ft: null, status: 'planned', season: Number(todayStr().slice(0, 4)),
     method: null, sow_date: null, transplant_date: null, expected_harvest: null, done_date: null,
-    source: null, notes: null, locked: false,
+    source: null, notes: null, locked: false, positions: null,
     ...fields,
   });
 }

@@ -92,3 +92,56 @@ export function pointInPolygon([x, y], pts) {
 export function distance(a, b) {
   return Math.hypot(a[0] - b[0], a[1] - b[1]);
 }
+
+/** Outline of a bed in garden feet: its 4 corners, or a 32-gon for round beds and pots. */
+export function bedOutline(bed) {
+  if (bed.shape !== 'round') return bedCorners(bed);
+  const rx = bed.length_ft / 2, ry = bed.width_ft / 2, n = 32;
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    pts.push(rotate([bed.x_ft + rx * Math.cos(a), bed.y_ft + ry * Math.sin(a)], bed.rotation_deg || 0, [bed.x_ft, bed.y_ft]));
+  }
+  return pts;
+}
+
+// ------------------------------------------------------------ pots
+
+// Typical fabric/nursery pot diameters (inches) by nominal gallons. Heights run ~0.8 x diameter.
+export const POT_SIZES = [[1, 7], [2, 8], [3, 10], [5, 12], [7, 14], [10, 16], [15, 18], [20, 20], [25, 21], [30, 24], [45, 26], [65, 30], [100, 36]];
+
+/** Diameter and height (feet) for a pot of `gal` gallons; interpolates between standard sizes. */
+export function potDims(gal) {
+  const g = Math.max(POT_SIZES[0][0], Math.min(POT_SIZES.at(-1)[0], gal || 5));
+  let d = POT_SIZES[0][1];
+  for (let i = 1; i < POT_SIZES.length; i++) {
+    const [g0, d0] = POT_SIZES[i - 1], [g1, d1] = POT_SIZES[i];
+    if (g <= g1) { d = d0 + ((g - g0) / (g1 - g0)) * (d1 - d0); break; }
+  }
+  const dia = Math.round((d / 12) * 100) / 100;
+  return { diameter_ft: dia, height_ft: Math.round(dia * 0.8 * 100) / 100 };
+}
+
+// ------------------------------------------------------------ plant layout
+
+/**
+ * Bed-local positions of each individual plant in a planting. Uses `planting.positions` when set;
+ * otherwise lays `qty` plants in rows from (x_ft, y_ft) at `spacingFt`, wrapping inside the bed.
+ */
+export function unitPositions(planting, bed, spacingFt) {
+  const n = Math.max(1, planting.qty || 1);
+  const saved = Array.isArray(planting.positions) ? planting.positions.slice(0, n) : [];
+  if (saved.length === n) return saved;
+  const out = [...saved];
+  const s = Math.max(0.25, spacingFt || 1);
+  const x0 = planting.x_ft ?? s / 2, y0 = planting.y_ft ?? s / 2;
+  const perRow = Math.max(1, Math.floor((bed.length_ft - x0 + s / 2) / s));
+  for (let i = out.length; i < n; i++) {
+    const col = i % perRow, row = Math.floor(i / perRow);
+    out.push([
+      Math.min(bed.length_ft, round2(x0 + col * s)),
+      Math.min(bed.width_ft, round2(y0 + row * s)),
+    ]);
+  }
+  return out;
+}
