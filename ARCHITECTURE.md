@@ -123,3 +123,16 @@ bedCapacity(bed, plantings, custom?) -> { usedSqFt, areaSqFt, pct }
 - Auth URLs: `supabase/config.toml` -> `npx supabase config push --project-ref unobfrradopjdkfrddll` (only declared keys change).
 - DB password: `~/.supabase/garden-planner-db-password.txt` on the temp laptop (not in Drive).
 - Sync: outbox batches consecutive upserts per table (<=200 rows/request); a failing batch retries its first row alone and drops it if rejected.
+
+## Onboarding by address (planned — needed before other users / subscriptions)
+Goal: a new user types their address and gets a ready-made yard. Pipeline, all free/public data:
+1. **Geocode** the address → lat/lng (US Census geocoder or Nominatim) → `gardens.origin_lat/lng`.
+2. **Frost dates + zone** from the location (NOAA climate-normal frost dates / USDA zone by ZIP) → `last_frost`, `first_frost`, `zone`.
+3. **Buildings** from OpenStreetMap Overpass (`way["building"](around:60,lat,lng)`), converted to garden feet and stored as polygon
+   structures (`points`). Pick the one tagged with the matching `addr:housenumber` as "House"; small ones nearby as sheds.
+   Verified 2026-09-27: OSM has Alex's house + shed footprints (ways 328703294, 977458140) and they match the photo.
+   Fallback when OSM is missing: Microsoft US Building Footprints.
+4. **Lot boundary** from county tax-lot GIS where available (e.g. Metro RLIS / Washington County taxlots), else let the user
+   draw it on the photo. Driveways/paths: user adds via "+ House / path" over the photo layer.
+Structures already support polygons (`structureCorners`, `scaleStructure` in geo.js), so steps 1–3 just write data.
+Overpass/Nominatim have usage policies (low volume, identify the app) — run lookups once per garden, cache results.
