@@ -2,9 +2,9 @@
 // and scaled up with image-rendering: pixelated, so everything — including the optional satellite
 // photo underlay — comes out chunky. World units are feet; see ARCHITECTURE.md "Coordinates".
 //
-// Interaction: drag to pan, wheel/pinch to zoom. Tap a bed or structure to select it: a toolbar
-// appears beside it (open, lock, rotate, edit, resize for rectangles) and the selection can then be
-// dragged. Nothing moves unless it's selected first, so panning never nudges a bed by accident.
+// Interaction: press on a bed and drag to move it; drag anywhere else to pan; wheel/pinch to zoom.
+// Tap a bed or structure to select it: a toolbar appears beside it (open, lock, rotate, edit, resize
+// for rectangles). Structures only move once selected. Locked items never move.
 
 import * as store from '../store.js';
 import { h, icon, fill, toast } from '../ui.js';
@@ -443,7 +443,9 @@ export function mount(main) {
 
     const hit = hitItem(w);
     const it = itemOf(hit);
-    const movable = isSelected(hit) && it && !it.locked;
+    // Beds drag straight away (press + drag, like v1). Structures are big and sit under the beds,
+    // so they only move once selected; otherwise dragging on them pans the map.
+    const movable = it && !it.locked && (hit.type === 'bed' || isSelected(hit));
     gesture = {
       kind: movable ? 'maybe-drag' : 'maybe-pan', hit, sx: e.clientX, sy: e.clientY, cam: { ...cam }, w0: w,
       offset: it ? [posOf(hit.type, it)[0] - w[0], posOf(hit.type, it)[1] - w[1]] : null,
@@ -466,11 +468,12 @@ export function mount(main) {
 
     if (gesture.kind.startsWith('maybe-')) {
       if (Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) < slop(e)) return;
-      if (gesture.kind === 'maybe-pan' && gesture.hit && isSelected(gesture.hit) && itemOf(gesture.hit)?.locked && !gesture.warned) {
-        gesture.warned = true;
-        toast('Locked. Tap the lock in the toolbar to move it.');
+      const held = itemOf(gesture.hit);
+      if (gesture.kind === 'maybe-pan' && held?.locked && (gesture.hit.type === 'bed' || isSelected(gesture.hit))) {
+        toast(`${held.name} is locked. Tap it, then tap Locked to unlock.`);
       }
       gesture.kind = gesture.kind === 'maybe-drag' ? 'drag' : 'pan';
+      if (gesture.kind === 'drag' && !isSelected(gesture.hit)) select(gesture.hit);
       if (gesture.kind === 'pan') canvas.classList.add('dragging');
     }
 
@@ -625,8 +628,8 @@ export function mount(main) {
       } }, icon('plus', 16), 'Bed'),
       h('button.btn.sm', { onclick: addStructure }, icon('plus', 16), 'House / path'),
       h('button.btn.sm', { onclick: fit }, 'Fit'),
-      prefs.hinted2 ? null : h('span.hint.px.flat', 'Tap a bed to select it, then drag to move',
-        h('button.btn.ghost.sm', { 'aria-label': 'Dismiss tip', onclick: () => { prefs.hinted2 = true; savePrefs(); renderHud(); } }, icon('close', 16))),
+      prefs.hinted3 ? null : h('span.hint.px.flat', 'Drag a bed to move it · tap it for lock & rotate',
+        h('button.btn.ghost.sm', { 'aria-label': 'Dismiss tip', onclick: () => { prefs.hinted3 = true; savePrefs(); renderHud(); } }, icon('close', 16))),
     );
   }
 

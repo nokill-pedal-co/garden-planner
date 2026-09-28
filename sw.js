@@ -1,6 +1,6 @@
 // Offline support. App files: network-first (so updates land), falling back to cache.
 // CDN libraries, fonts and satellite tiles: cache-first. Supabase API calls: never cached.
-const VERSION = 'gp2-v4';
+const VERSION = 'gp2-v5';
 const SHELL = [
   './', './index.html', './manifest.webmanifest', './css/app.css',
   './js/main.js', './js/store.js', './js/sync.js', './js/config.js', './js/ui.js',
@@ -40,7 +40,8 @@ self.addEventListener('fetch', event => {
   }
 
   if (url.origin === self.location.origin) {
-    event.respondWith(fetch(req).then(res => {
+    // cache: 'no-cache' revalidates with the server instead of trusting GitHub Pages' 10-minute max-age.
+    event.respondWith(fetch(req.url, { cache: 'no-cache', credentials: 'same-origin' }).then(res => {
       if (res.ok) {
         const copy = res.clone();
         caches.open(VERSION).then(c => c.put(req, copy));

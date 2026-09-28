@@ -216,6 +216,16 @@ async function route() {
 
 function registerServiceWorker() {
   if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  // When a new deploy's worker takes over, reload once so the page runs the new code too.
+  // (Skipped on first install, when there was no previous controller.)
+  if (navigator.serviceWorker.controller) {
+    let reloaded = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloaded) return;
+      reloaded = true;
+      location.reload();
+    });
+  }
   navigator.serviceWorker.register('sw.js').catch(e => console.warn('SW registration failed', e));
 }
 
