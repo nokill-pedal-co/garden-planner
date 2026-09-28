@@ -9,7 +9,7 @@ const OUTBOX_KEY = 'gp2.outbox';
 // Columns the server accepts per table; anything else on a row is client-only and stripped.
 const COLUMNS = {
   gardens: ['id', 'name', 'place', 'zone', 'last_frost', 'first_frost', 'origin_lat', 'origin_lng', 'lot', 'structures', 'is_public'],
-  beds: ['id', 'garden_id', 'name', 'kind', 'area', 'length_ft', 'width_ft', 'height_ft', 'x_ft', 'y_ft', 'rotation_deg', 'color', 'notes', 'sort', 'archived'],
+  beds: ['id', 'garden_id', 'name', 'kind', 'area', 'length_ft', 'width_ft', 'height_ft', 'x_ft', 'y_ft', 'rotation_deg', 'color', 'notes', 'sort', 'archived', 'locked'],
   plantings: ['id', 'garden_id', 'bed_id', 'plant_key', 'variety', 'qty', 'x_ft', 'y_ft', 'status', 'season', 'method',
     'sow_date', 'transplant_date', 'expected_harvest', 'done_date', 'source', 'notes', 'locked'],
   events: ['id', 'garden_id', 'type', 'date', 'planting_id', 'bed_id', 'plant_key', 'amount', 'unit', 'text', 'meta'],

@@ -18,7 +18,7 @@ create table if not exists public.gardens (
   origin_lat   double precision,
   origin_lng   double precision,
   lot          jsonb not null default '[]'::jsonb,   -- [[x_ft, y_ft], ...]
-  structures   jsonb not null default '[]'::jsonb,   -- [{kind:'house', x, y, w, h, rotation}]
+  structures   jsonb not null default '[]'::jsonb,   -- [{id, kind, name, x, y, w, h, rotation, locked}] feet, centre-based
   is_public    boolean not null default false,
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
@@ -51,6 +51,9 @@ create table if not exists public.beds (
   created_at   timestamptz not null default now(),
   updated_at   timestamptz not null default now()
 );
+
+-- Added after launch: pin a bed so a stray drag in the yard can't move it.
+alter table public.beds add column if not exists locked boolean not null default false;
 
 create table if not exists public.plantings (
   id               uuid primary key default gen_random_uuid(),

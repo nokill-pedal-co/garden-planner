@@ -70,6 +70,51 @@ export async function editBedSheet(bed) {
   return res ? store.updateBed(bed.id, res) : null;
 }
 
+// ------------------------------------------------------------ structures (house, driveway…)
+
+export const STRUCTURE_KINDS = {
+  house: 'House', garage: 'Garage', shed: 'Shed', driveway: 'Driveway',
+  patio: 'Patio', path: 'Path', deck: 'Deck',
+};
+const STRUCTURE_SIZES = { house: [40, 30], garage: [22, 22], shed: [10, 8], driveway: [18, 30], patio: [14, 12], path: [3, 20], deck: [12, 10] };
+
+/** Create or edit a structure. Resolves to its fields, 'delete', or null. */
+export function structureSheet(s = null) {
+  return sheet(close => {
+    const form = h('form.stack', {
+      onsubmit: e => {
+        e.preventDefault();
+        const d = formData(form);
+        close({
+          kind: d.kind, name: d.name || STRUCTURE_KINDS[d.kind],
+          w: clampPos(d.w, 10), h: clampPos(d.h, 10), rotation: ((d.rotation || 0) % 360 + 360) % 360,
+        });
+      },
+    },
+    h('header', sprite('icon_yard', { size: 48 }), h('h2', s ? `Edit ${s.name}` : 'Add structure')),
+    h('div.grid2',
+      field('Kind', select(Object.entries(STRUCTURE_KINDS), s?.kind || 'house', {
+        name: 'kind',
+        onchange: e => {
+          if (s) return;
+          const [w, hh] = STRUCTURE_SIZES[e.target.value];
+          form.elements.w.value = w; form.elements.h.value = hh;
+        },
+      })),
+      field('Label', h('input', { type: 'text', name: 'name', value: s?.name || '', placeholder: 'House' })),
+      field('Length (ft)', h('input', { type: 'number', name: 'w', value: s?.w ?? 40, min: 1, step: 0.5 })),
+      field('Width (ft)', h('input', { type: 'number', name: 'h', value: s?.h ?? 30, min: 1, step: 0.5 })),
+      field('Rotation (°)', h('input', { type: 'number', name: 'rotation', value: s?.rotation ?? 0, step: 1 })),
+    ),
+    h('p.small.muted', 'Tip: turn on Photo in the yard, then hold-and-drag to move it and drag the corner handle to size it.'),
+    h('div.actions',
+      h('button.btn.primary', { type: 'submit' }, s ? 'Save' : 'Add'),
+      s ? h('button.btn.danger', { type: 'button', onclick: () => close('delete') }, icon('trash', 16), 'Delete') : null,
+      h('button.btn', { type: 'button', onclick: () => close(null) }, 'Cancel')));
+    return form;
+  }, { label: s ? 'Edit structure' : 'Add structure' });
+}
+
 // ------------------------------------------------------------ plantings
 
 export async function plantingSheet(planting) {

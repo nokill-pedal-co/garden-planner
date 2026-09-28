@@ -209,7 +209,7 @@ export function addBed(fields) {
   return commit('beds', {
     id: uuid(), garden_id: state.garden.id, name: 'New bed', kind: 'raised', area: null,
     length_ft: 4, width_ft: 4, height_ft: 1, x_ft: 0, y_ft: 0, rotation_deg: 0,
-    color: null, notes: null, sort: maxSort + 1, archived: false,
+    color: null, notes: null, sort: maxSort + 1, archived: false, locked: false,
     ...fields,
   });
 }

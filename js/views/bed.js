@@ -164,7 +164,7 @@ export function mount(main, bedId) {
         e.preventDefault();
         drag = { id: p.id, el, sx: e.clientX, sy: e.clientY, moved: false, locked: p.locked };
         dragging = true;
-        soil.setPointerCapture(e.pointerId);
+        try { soil.setPointerCapture(e.pointerId); } catch { /* synthetic or already-released pointer */ }
         return;
       }
       if (ui.armed) place(bed, ...toFt(e));

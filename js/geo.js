@@ -38,6 +38,27 @@ export function bedCorners(bed) {
     .map(([dx, dy]) => rotate([cx + dx, cy + dy], bed.rotation_deg || 0, [cx, cy]));
 }
 
+/**
+ * Outline of a structure: { x, y, w, h, rotation, points? }. Same centre-based model as beds;
+ * `points` (optional) is a polygon in unrotated local feet around the centre, e.g. a building
+ * footprint from OpenStreetMap. w/h are its bounding box.
+ */
+export function structureCorners(s) {
+  if (s.points?.length) return s.points.map(([px, py]) => rotate([s.x + px, s.y + py], s.rotation || 0, [s.x, s.y]));
+  return bedCorners({ x_ft: s.x, y_ft: s.y, length_ft: s.w, width_ft: s.h, rotation_deg: s.rotation || 0 });
+}
+
+/** Resize a structure's bounding box to w x h, scaling its polygon to match (local frame). */
+export function scaleStructure(s, w, h) {
+  if (!s.points?.length) return { w, h };
+  const kx = w / s.w, ky = h / s.h;
+  return { w, h, points: s.points.map(([px, py]) => [round2(px * kx), round2(py * ky)]) };
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
 /** A point inside a bed (bed-local feet, origin top-left) -> garden feet. */
 export function bedToGarden(bed, x, y) {
   const lx = bed.x_ft - bed.length_ft / 2 + x;

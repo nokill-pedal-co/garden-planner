@@ -12,6 +12,15 @@ const V1_LOT = [
   [45.55286920061208, -122.89063239424209],
   [45.553147176345846, -122.89072224824409],
 ];
+// House + shed footprints from OpenStreetMap (ways 328703294, 977458140), converted to garden feet
+// around their bbox centre; driveway traced from the satellite photo in front of the garage.
+const V1_TRACED = [
+  { kind: 'house', name: 'House', x: 10.58, y: -16.49, w: 72.3, h: 77.3, rotation: 0, source: 'osm:way/328703294',
+    points: [[-8.69, -38.66], [3.8, -18.75], [7.19, -20.93], [19.27, -1.67], [23.09, -4.08], [36.17, 16.74], [1.43, 38.66], [-36.17, -21.33]] },
+  { kind: 'shed', name: 'Shed', x: -44.27, y: 13.71, w: 12.8, h: 13, rotation: 0, source: 'osm:way/977458140',
+    points: [[6.38, 1.54], [-1.1, 6.49], [-6.38, -1.54], [1.12, -6.5]] },
+  { kind: 'driveway', name: 'Driveway', x: 44.2, y: -14.4, w: 22, h: 16, rotation: 47.6 },
+];
 const V1_MAP_POS = {
   bed1: { lat: 45.55294, lng: -122.89055 },
   bed2: { lat: 45.55294, lng: -122.89046 },
@@ -141,8 +150,8 @@ export function importV1(db, exported = null, opts = {}) {
     origin_lat: V1_LOT_CENTER.lat,
     origin_lng: V1_LOT_CENTER.lng,
     lot: V1_LOT.map(([lat, lng]) => ft(fromLatLng(V1_LOT_CENTER, lat, lng))),
-    // v1's house footprint was a rough guess that overlaps the front beds; the photo layer shows the real one.
-    structures: [],
+    // v1's house box overlapped the front beds; these come from OpenStreetMap + the photo.
+    structures: V1_TRACED.map(t => ({ id: uuid(), locked: false, ...t })),
     is_public: false,
   };
 
@@ -172,6 +181,7 @@ export function importV1(db, exported = null, opts = {}) {
         src.structures ? fixMojibake(src.structures) : null].filter(Boolean).join('\n') || null,
       sort: sort++,
       archived: false,
+      locked: false,
       _placed: !!pos,
     };
     beds.push(bed);

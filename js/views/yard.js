@@ -1,46 +1,62 @@
 // Yard: top-down pixel view of the lot. The canvas is rendered at low resolution ("art pixels")
 // and scaled up with image-rendering: pixelated, so everything — including the optional satellite
 // photo underlay — comes out chunky. World units are feet; see ARCHITECTURE.md "Coordinates".
+//
+// Interaction: drag empty ground to pan, wheel/pinch to zoom. Hold a bed or structure (~0.3s) to
+// pick it up and drag it. Right-click (or long-press and release) for its menu: lock, rotate, edit.
+// A selected structure shows a corner handle for resizing.
 
 import * as store from '../store.js';
-import { h, icon, plantSprite, sprite, clear, fill, toast } from '../ui.js';
+import { h, icon, plantSprite, fill, toast, confirmSheet } from '../ui.js';
 import { spriteCanvas } from '../sprites.js';
 import { getPlant } from '../plants.js';
-import { bedCorners, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng } from '../geo.js';
-import { editBedSheet, newBedSheet } from './common.js';
+import { bedCorners, structureCorners, scaleStructure, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng, rotate } from '../geo.js';
+import { editBedSheet, newBedSheet, structureSheet, STRUCTURE_KINDS } from './common.js';
 import { progress, todayStr } from '../season.js';
 
 const ART = 2;                                   // CSS px per art pixel
 const ZOOMS = [2, 3, 4, 6, 8, 12, 16, 24, 32];  // art px per foot
 const PREFS = 'gp2.yard';
+const HOLD_MS = 300;
+const SLOP_PX = 6;                               // CSS px of movement before a press becomes a pan
 const TILE_URL = (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
 
 const COLORS = {
-  outside: '#2a7a48', lotLine: '#1a1c2c', house: '#94b0c2', houseRoof: '#566c86',
-  wood: '#b07a4a', woodDark: '#734c3b', pot: '#ef7d57', soil: '#4a2f25', ink: '#1a1c2c',
-  select: '#ffcd75', label: '#f4f4f4',
+  outside: '#2a7a48', lotLine: '#1a1c2c', wood: '#b07a4a', pot: '#ef7d57', soil: '#4a2f25',
+  ink: '#1a1c2c', select: '#ffcd75', label: '#f4f4f4', lock: '#94b0c2',
+};
+
+// fill: flat colour, or pattern: sprite tile. roof: [shingle line colour, ridge colour].
+const STRUCTURE_STYLE = {
+  house: { fill: '#566c86', roof: ['#3b4a63', '#94b0c2'] },
+  garage: { fill: '#566c86', roof: ['#3b4a63', '#94b0c2'] },
+  shed: { fill: '#734c3b', roof: ['#4a2f25', '#b07a4a'] },
+  driveway: { fill: '#aeb9bf', seams: '#8d9aa3' },
+  patio: { pattern: 'tile_path' },
+  path: { pattern: 'tile_path' },
+  deck: { pattern: 'tile_wood' },
 };
 
 export function mount(main) {
-  const prefs = store.storage.get(PREFS, { photo: false, opacity: 0.8, zoomIndex: null, cx: null, cy: null });
+  const prefs = store.storage.get(PREFS, { photo: false, opacity: 0.8, zoomIndex: null, cx: null, cy: null, hinted: false });
   const view = h('div.yard');
   const canvas = h('canvas.world', { 'aria-label': 'Yard map. Beds are listed in the Beds tab.' });
   const ctx = canvas.getContext('2d');
   const hud = h('div.hud');
   const card = h('div.bed-card.px', { hidden: true });
+  const menu = h('div.ctx-menu.px', { hidden: true, role: 'menu' });
   const zoomBox = h('div.zoom',
     h('button.btn.icon', { 'aria-label': 'Zoom in', onclick: () => zoomBy(1) }, icon('plus', 24)),
     h('button.btn.icon', { 'aria-label': 'Zoom out', onclick: () => zoomBy(-1) }, h('b', { style: { fontSize: '22px' } }, '–')));
-  view.append(canvas, hud, card, zoomBox);
+  view.append(canvas, hud, card, zoomBox, menu);
   main.append(view);
   main.style.overflow = 'hidden';
 
   let W = 0, H = 0;                // canvas size in art px
   let zi = prefs.zoomIndex ?? 4;
   let cam = { x: prefs.cx ?? 0, y: prefs.cy ?? 0 };
-  let selected = null;
-  let arrange = false;
-  let dirty = true;
+  let selected = null;             // { type: 'bed' | 'struct', id }
+  let dirty = false;
   const sprites = new Map();
   const tiles = new Map();
   let patterns = null;
@@ -48,6 +64,45 @@ export function mount(main) {
   const ppf = () => ZOOMS[zi];
   const state = () => store.getState();
   const visibleBeds = () => state().beds.filter(b => !b.archived && b.kind !== 'tray' && b.kind !== 'plan');
+  const structures = () => state().garden?.structures || [];
+
+  // ---------------------------------------------------------- items (beds + structures)
+
+  const itemOf = sel => {
+    if (!sel) return null;
+    if (sel.type === 'bed') return state().beds.find(b => b.id === sel.id) || null;
+    return structures().find(s => s.id === sel.id) || null;
+  };
+  const cornersOf = (type, it) => (type === 'bed' ? bedCorners(it) : structureCorners(it));
+  const posOf = (type, it) => (type === 'bed' ? [it.x_ft, it.y_ft] : [it.x, it.y]);
+  const rotOf = (type, it) => (type === 'bed' ? it.rotation_deg || 0 : it.rotation || 0);
+
+  function hitItem([x, y]) {
+    const beds = visibleBeds();
+    for (let i = beds.length - 1; i >= 0; i--) {
+      if (pointInPolygon([x, y], bedCorners(beds[i]))) return { type: 'bed', id: beds[i].id };
+    }
+    const ss = structures();
+    for (let i = ss.length - 1; i >= 0; i--) {
+      if (pointInPolygon([x, y], structureCorners(ss[i]))) return { type: 'struct', id: ss[i].id };
+    }
+    return null;
+  }
+
+  function saveStructures(list) {
+    store.updateGarden({ structures: list });
+  }
+
+  function updateItem(sel, patch) {
+    if (sel.type === 'bed') return store.updateBed(sel.id, patch);
+    saveStructures(structures().map(s => (s.id === sel.id ? { ...s, ...patch } : s)));
+  }
+
+  function rotateItem(sel, deg) {
+    const it = itemOf(sel);
+    const r = ((rotOf(sel.type, it) + deg) % 360 + 360) % 360;
+    updateItem(sel, sel.type === 'bed' ? { rotation_deg: r } : { rotation: r });
+  }
 
   // ---------------------------------------------------------- sizing + camera
 
@@ -64,12 +119,13 @@ export function mount(main) {
 
   function fit() {
     const g = state().garden;
-    const pts = g?.lot?.length ? g.lot : visibleBeds().flatMap(bedCorners);
+    const pts = g?.lot?.length ? g.lot : [...visibleBeds().flatMap(bedCorners), ...structures().flatMap(structureCorners)];
     if (!pts.length) { cam = { x: 0, y: 0 }; zi = 5; return invalidate(); }
     const b = bbox(pts);
     cam = { x: (b.minX + b.maxX) / 2, y: (b.minY + b.maxY) / 2 };
     const need = Math.min((W - 20) / (b.maxX - b.minX || 1), (H - 60) / (b.maxY - b.minY || 1));
     zi = Math.max(0, ZOOMS.findLastIndex(z => z <= need));
+    savePrefs();
     invalidate();
   }
 
@@ -100,8 +156,8 @@ export function mount(main) {
   // ---------------------------------------------------------- drawing
 
   function invalidate() {
-    if (dirty === 'queued') return;
-    dirty = 'queued';
+    if (dirty) return;
+    dirty = true;
     requestAnimationFrame(draw);
   }
 
@@ -162,47 +218,76 @@ export function mount(main) {
       ctx.setLineDash([]);
     }
 
-    for (const s of g.structures || []) drawStructure(s);
+    for (const s of structures()) drawStructure(s);
     const today = todayStr();
     const beds = visibleBeds();
     for (const bed of beds) drawBed(bed);
     for (const bed of beds) drawPlants(bed, today);
+    for (const s of structures()) drawStructureLabel(s);
     for (const bed of beds) drawLabel(bed);
-    if (selected) {
-      const bed = beds.find(b => b.id === selected);
-      if (bed) {
-        path(bedCorners(bed));
-        ctx.strokeStyle = COLORS.select;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-      }
-    }
+    drawSelection();
+  }
+
+  /** Run `fn` with the context in the item's local frame: origin at its centre, x along its length, 1 unit = 1 ft. */
+  function inLocalFrame(cx, cy, deg, fn) {
+    const [sx, sy] = toScreen(cx, cy);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.rotate((deg * Math.PI) / 180);
+    ctx.scale(ppf(), ppf());
+    fn();
+    ctx.restore();
   }
 
   function drawStructure(s) {
-    if (s.kind !== 'house') return;
-    const pts = [[s.x - s.w / 2, s.y - s.h / 2], [s.x + s.w / 2, s.y - s.h / 2], [s.x + s.w / 2, s.y + s.h / 2], [s.x - s.w / 2, s.y + s.h / 2]];
-    path(pts);
-    ctx.fillStyle = prefs.photo ? 'rgba(148,176,194,0.35)' : COLORS.house;
+    const style = STRUCTURE_STYLE[s.kind] || STRUCTURE_STYLE.patio;
+    const corners = structureCorners(s);
+    ctx.globalAlpha = prefs.photo ? 0.6 : 1;
+    path(corners);
+    ctx.fillStyle = style.pattern ? worldPattern(style.pattern) : style.fill;
     ctx.fill();
-    if (!prefs.photo) {
-      // Roof shingles: a row every 2 ft.
+
+    if (style.roof || style.seams) {
       ctx.save();
+      path(corners);
       ctx.clip();
-      ctx.fillStyle = COLORS.houseRoof;
-      const [x0, y0] = toScreen(s.x - s.w / 2, s.y - s.h / 2);
-      const [x1, y1] = toScreen(s.x + s.w / 2, s.y + s.h / 2);
-      const step = Math.max(2, Math.round(2 * ppf()));
-      for (let y = y0; y < y1; y += step) ctx.fillRect(x0, y, x1 - x0, 1);
+      inLocalFrame(s.x, s.y, s.rotation || 0, () => {
+        const hw = s.w / 2, hh = s.h / 2;
+        const px = 1 / ppf(); // one art pixel in local units
+        if (style.roof) {
+          // Shingle rows every 1.5 ft running along the length, ridge down the middle.
+          const alongLength = s.w >= s.h;
+          ctx.fillStyle = style.roof[0];
+          if (alongLength) for (let y = -hh + 1.5; y < hh; y += 1.5) ctx.fillRect(-hw, y, s.w, px);
+          else for (let x = -hw + 1.5; x < hw; x += 1.5) ctx.fillRect(x, -hh, px, s.h);
+          ctx.fillStyle = style.roof[1];
+          if (s.points?.length) return; // footprints aren't simple gables: shingles only
+          if (alongLength) ctx.fillRect(-hw + hh * 0.5, -px, s.w - hh, 2 * px);
+          else ctx.fillRect(-px, -hh + hw * 0.5, 2 * px, s.h - hw);
+        } else {
+          // Concrete slabs: an expansion joint every 10 ft along the length.
+          ctx.fillStyle = style.seams;
+          const long = s.w >= s.h;
+          const len = long ? s.w : s.h;
+          for (let d = -len / 2 + 10; d < len / 2 - 1; d += 10) {
+            if (long) ctx.fillRect(d, -hh, px, s.h); else ctx.fillRect(-hw, d, s.w, px);
+          }
+        }
+      });
       ctx.restore();
     }
+    path(corners);
     ctx.strokeStyle = COLORS.ink;
     ctx.lineWidth = 1;
     ctx.stroke();
-    if (ppf() >= 3) {
-      const [cx, cy] = toScreen(s.x, s.y);
-      text('HOUSE', cx, cy, COLORS.ink, prefs.photo ? COLORS.label : null);
-    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawStructureLabel(s) {
+    if (ppf() < 3) return;
+    const [cx, cy] = toScreen(s.x, s.y);
+    text((s.name || STRUCTURE_KINDS[s.kind] || '').toUpperCase(), cx, cy, COLORS.label, COLORS.ink);
+    if (s.locked && ppf() >= 6) text('LOCKED', cx, cy + 9, COLORS.lock, COLORS.ink);
   }
 
   function drawBed(bed) {
@@ -248,8 +333,27 @@ export function mount(main) {
     const b = bbox(bedCorners(bed));
     const [cx] = toScreen((b.minX + b.maxX) / 2, 0);
     const [, top] = toScreen(0, b.minY);
-    text(bed.name.toUpperCase(), cx, top - 5, COLORS.label, COLORS.ink);
+    text(`${bed.locked ? '* ' : ''}${bed.name.toUpperCase()}`, cx, top - 5, COLORS.label, COLORS.ink);
   }
+
+  function drawSelection() {
+    const it = itemOf(selected);
+    if (!it) return;
+    path(cornersOf(selected.type, it));
+    ctx.strokeStyle = gesture?.armed ? COLORS.label : COLORS.select;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    if (selected.type === 'struct' && !it.locked) {
+      const [hx, hy] = toScreen(...handlePos(it));
+      ctx.fillStyle = COLORS.select;
+      ctx.fillRect(hx - 3, hy - 3, 6, 6);
+      ctx.strokeStyle = COLORS.ink;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(hx - 3.5, hy - 3.5, 7, 7);
+    }
+  }
+
+  const handlePos = s => rotate([s.x + s.w / 2, s.y + s.h / 2], s.rotation || 0, [s.x, s.y]);
 
   function text(str, x, y, color, outline) {
     ctx.font = '8px Silkscreen, monospace';
@@ -305,81 +409,149 @@ export function mount(main) {
 
   const pointers = new Map();
   let gesture = null;
+  let lastTap = null;
+  const snap = v => Math.round(v * 2) / 2;
 
-  function hitBed([x, y]) {
-    const beds = visibleBeds();
-    for (let i = beds.length - 1; i >= 0; i--) if (pointInPolygon([x, y], bedCorners(beds[i]))) return beds[i];
-    return null;
+  function cancelHold() {
+    clearTimeout(gesture?.timer);
   }
 
   canvas.addEventListener('pointerdown', e => {
-    canvas.setPointerCapture(e.pointerId);
+    if (e.button === 2) return; // right-click: handled by contextmenu
+    closeMenu();
+    try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic or already-released pointer */ }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
+      cancelHold();
       const [a, b] = [...pointers.values()];
       gesture = { kind: 'pinch', dist: Math.hypot(a.x - b.x, a.y - b.y), zi };
       return;
     }
     const w = eventWorld(e);
-    const bed = hitBed(w);
-    if (bed) {
-      select(bed.id);
-      if (arrange) {
-        gesture = { kind: 'bed', id: bed.id, dx: bed.x_ft - w[0], dy: bed.y_ft - w[1], moved: false };
+
+    // Resize handle of the selected structure: no hold needed.
+    const sel = itemOf(selected);
+    if (selected?.type === 'struct' && sel && !sel.locked) {
+      const [hx, hy] = handlePos(sel);
+      if (Math.hypot(w[0] - hx, w[1] - hy) * ppf() <= 7) {
+        const fixed = rotate([sel.x - sel.w / 2, sel.y - sel.h / 2], sel.rotation || 0, [sel.x, sel.y]);
+        gesture = { kind: 'resize', id: sel.id, fixed, orig: { ...sel }, moved: false };
         return;
       }
-    } else {
-      select(null);
     }
-    gesture = { kind: 'pan', sx: e.clientX, sy: e.clientY, cam: { ...cam }, bed: bed?.id ?? null, moved: false };
-    canvas.classList.add('dragging');
+
+    const hit = hitItem(w);
+    gesture = { kind: 'press', hit, sx: e.clientX, sy: e.clientY, cam: { ...cam }, w0: w, armed: false, moved: false, pointerType: e.pointerType };
+    if (hit) {
+      gesture.timer = setTimeout(() => {
+        if (gesture?.kind !== 'press' || gesture.hit !== hit) return;
+        gesture.armed = true;
+        select(hit);
+        navigator.vibrate?.(12);
+        canvas.style.cursor = itemOf(hit)?.locked ? 'not-allowed' : 'move';
+        invalidate();
+      }, HOLD_MS);
+    }
   });
 
   canvas.addEventListener('pointermove', e => {
     if (!pointers.has(e.pointerId)) return;
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (!gesture) return;
+
     if (gesture.kind === 'pinch' && pointers.size === 2) {
       const [a, b] = [...pointers.values()];
       const d = Math.hypot(a.x - b.x, a.y - b.y);
       const steps = Math.round(Math.log2(d / gesture.dist) * 2);
       const target = Math.max(0, Math.min(ZOOMS.length - 1, gesture.zi + steps));
       if (target !== zi) { zi = target; invalidate(); }
-    } else if (gesture.kind === 'pan') {
+      return;
+    }
+
+    if (gesture.kind === 'press') {
+      const dist = Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy);
+      if (dist < SLOP_PX) return;
+      cancelHold();
+      const it = gesture.armed ? itemOf(gesture.hit) : null;
+      if (it && !it.locked) {
+        const [px, py] = posOf(gesture.hit.type, it);
+        gesture = { ...gesture, kind: 'drag', dx: px - gesture.w0[0], dy: py - gesture.w0[1] };
+      } else {
+        if (it?.locked) toast(`${it.name || 'It'} is locked. Right-click or long-press to unlock.`);
+        gesture = { ...gesture, kind: 'pan' };
+        canvas.classList.add('dragging');
+      }
+    }
+
+    if (gesture.kind === 'pan') {
       const dx = (e.clientX - gesture.sx) / ART / ppf(), dy = (e.clientY - gesture.sy) / ART / ppf();
-      if (Math.abs(dx) + Math.abs(dy) > 0.2) gesture.moved = true;
       cam = { x: gesture.cam.x - dx, y: gesture.cam.y - dy };
       invalidate();
-    } else if (gesture.kind === 'bed') {
+    } else if (gesture.kind === 'drag') {
       const [x, y] = eventWorld(e);
-      const bed = state().beds.find(b => b.id === gesture.id);
+      const it = itemOf(gesture.hit);
       const nx = snap(x + gesture.dx), ny = snap(y + gesture.dy);
-      if (bed && (nx !== bed.x_ft || ny !== bed.y_ft)) {
-        gesture.moved = true;
-        // Live preview without writing every frame: mutate a local copy the renderer reads.
-        Object.assign(bed, { x_ft: nx, y_ft: ny });
-        invalidate();
-      }
+      // Live preview: mutate the in-memory row; it's committed once on release.
+      if (gesture.hit.type === 'bed') Object.assign(it, { x_ft: nx, y_ft: ny });
+      else Object.assign(it, { x: nx, y: ny });
+      gesture.moved = true;
+      invalidate();
+    } else if (gesture.kind === 'resize') {
+      const s = structures().find(x => x.id === gesture.id);
+      const [px, py] = eventWorld(e);
+      const [fx, fy] = gesture.fixed;
+      const [lx, ly] = rotate([px - fx, py - fy], -(s.rotation || 0));
+      const w = Math.max(1, snap(lx)), hgt = Math.max(1, snap(ly));
+      const [cx, cy] = rotate([fx + w / 2, fy + hgt / 2], s.rotation || 0, [fx, fy]);
+      Object.assign(s, scaleStructure(gesture.orig, w, hgt), { x: cx, y: cy });
+      gesture.moved = true;
+      invalidate();
     }
   });
 
   const end = e => {
-    pointers.delete(e.pointerId);
+    const wasPointer = pointers.delete(e.pointerId);
     canvas.classList.remove('dragging');
-    if (!gesture) return;
-    if (gesture.kind === 'bed' && gesture.moved) {
-      const bed = state().beds.find(b => b.id === gesture.id);
-      store.updateBed(bed.id, { x_ft: bed.x_ft, y_ft: bed.y_ft });
+    canvas.style.cursor = '';
+    if (!gesture || !wasPointer) return;
+    const g = gesture;
+    cancelHold();
+
+    if (g.kind === 'press') {
+      if (g.armed) {
+        // Long-press released without moving: show the item's menu (the touch "right-click").
+        openMenu(g.hit, e.clientX, e.clientY);
+      } else {
+        const now = Date.now();
+        const doubleTap = g.hit && lastTap && lastTap.hit?.id === g.hit.id && now - lastTap.t < 350;
+        lastTap = { hit: g.hit, t: now };
+        if (doubleTap && g.hit.type === 'bed') location.hash = `#/bed/${g.hit.id}`;
+        else if (doubleTap && g.hit.type === 'struct') editStructure(itemOf(g.hit));
+        else select(g.hit);
+      }
+    } else if (g.kind === 'drag' && g.moved) {
+      const it = itemOf(g.hit);
+      if (g.hit.type === 'bed') store.updateBed(it.id, { x_ft: it.x_ft, y_ft: it.y_ft });
+      else saveStructures([...structures()]);
+    } else if (g.kind === 'resize' && g.moved) {
+      saveStructures([...structures()]);
+    } else if (g.kind === 'pan') {
+      savePrefs();
     }
-    if (gesture.kind === 'pan') savePrefs();
     if (pointers.size === 0) gesture = null;
+    invalidate();
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
 
-  canvas.addEventListener('dblclick', e => {
-    const bed = hitBed(eventWorld(e));
-    if (bed) location.hash = `#/bed/${bed.id}`;
+  canvas.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    cancelHold();
+    gesture = null;
+    const hit = hitItem(eventWorld(e));
+    if (!hit) return closeMenu();
+    select(hit);
+    openMenu(hit, e.clientX, e.clientY);
   });
 
   canvas.addEventListener('wheel', e => {
@@ -387,15 +559,78 @@ export function mount(main) {
     zoomBy(e.deltaY < 0 ? 1 : -1, eventWorld(e));
   }, { passive: false });
 
-  const snap = v => Math.round(v * 2) / 2;
+  // ---------------------------------------------------------- context menu
 
-  // ---------------------------------------------------------- HUD + bed card
+  function openMenu(sel, clientX, clientY) {
+    const it = itemOf(sel);
+    if (!it) return;
+    const isBed = sel.type === 'bed';
+    const act = (label, fn, ic) => h('button.menu-item', { role: 'menuitem', onclick: () => { closeMenu(); fn(); } }, ic ? icon(ic, 16) : h('span.menu-pad'), label);
+    const items = [
+      h('div.menu-title.small', it.name || STRUCTURE_KINDS[it.kind]),
+      isBed ? act('Open bed', () => { location.hash = `#/bed/${it.id}`; }, 'bed') : null,
+      act(it.locked ? 'Unlock' : 'Lock in place', () => {
+        updateItem(sel, { locked: !it.locked });
+        toast(it.locked ? 'Unlocked' : 'Locked');
+      }, it.locked ? 'unlock' : 'lock'),
+      it.locked ? null : act('Rotate 15° left', () => rotateItem(sel, -15)),
+      it.locked ? null : act('Rotate 15° right', () => rotateItem(sel, 15)),
+      it.locked || isBed ? null : act('Rotate 1° left', () => rotateItem(sel, -1)),
+      it.locked || isBed ? null : act('Rotate 1° right', () => rotateItem(sel, 1)),
+      act('Edit…', () => (isBed ? editBedSheet(it) : editStructure(it)), 'edit'),
+      isBed ? null : act('Duplicate', () => {
+        const copy = { ...it, id: crypto.randomUUID(), x: it.x + 3, y: it.y + 3, locked: false };
+        saveStructures([...structures(), copy]);
+        select({ type: 'struct', id: copy.id });
+      }),
+      isBed ? null : act('Delete', async () => {
+        if (await confirmSheet(`Delete ${it.name || 'this structure'}?`, { ok: 'Delete', danger: true })) {
+          saveStructures(structures().filter(s => s.id !== it.id));
+          select(null);
+        }
+      }, 'trash'),
+    ];
+    fill(menu, items);
+    menu.hidden = false;
+    const r = view.getBoundingClientRect();
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    menu.style.left = `${Math.min(Math.max(4, clientX - r.left), r.width - mw - 8)}px`;
+    menu.style.top = `${Math.min(Math.max(4, clientY - r.top), r.height - mh - 8)}px`;
+    menu.querySelector('button')?.focus();
+  }
+
+  function closeMenu() {
+    menu.hidden = true;
+  }
+
+  const onDocDown = e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); };
+  const onKey = e => { if (e.key === 'Escape') closeMenu(); };
+  document.addEventListener('pointerdown', onDocDown, true);
+  document.addEventListener('keydown', onKey);
+
+  async function editStructure(s) {
+    const res = await structureSheet(s);
+    if (res === 'delete') {
+      saveStructures(structures().filter(x => x.id !== s.id));
+      select(null);
+    } else if (res) {
+      saveStructures(structures().map(x => (x.id === s.id ? { ...x, ...res, ...scaleStructure(x, res.w, res.h) } : x)));
+    }
+  }
+
+  async function addStructure() {
+    const res = await structureSheet(null);
+    if (!res || res === 'delete') return;
+    const s = { id: crypto.randomUUID(), x: snap(cam.x), y: snap(cam.y), locked: false, ...res };
+    saveStructures([...structures(), s]);
+    select({ type: 'struct', id: s.id });
+  }
+
+  // ---------------------------------------------------------- HUD + card
 
   function renderHud() {
     const g = state().garden;
-    fill(hud, 
-      h('button.btn.sm', { 'aria-pressed': String(arrange), onclick: () => { arrange = !arrange; renderHud(); renderCard(); } },
-        icon(arrange ? 'unlock' : 'lock', 16), arrange ? 'Arranging' : 'Arrange'),
+    fill(hud,
       g?.origin_lat != null
         ? h('button.btn.sm', { 'aria-pressed': String(prefs.photo), onclick: () => { prefs.photo = !prefs.photo; savePrefs(); renderHud(); invalidate(); } },
           icon('map', 16), 'Photo')
@@ -404,42 +639,53 @@ export function mount(main) {
         h('input', { type: 'range', min: 0.2, max: 1, step: 0.05, value: prefs.opacity,
           oninput: e => { prefs.opacity = Number(e.target.value); savePrefs(); invalidate(); } })) : null,
       h('button.btn.sm', { onclick: async () => {
-        const [x, y] = [snap(cam.x), snap(cam.y)];
-        const bed = await newBedSheet({ x_ft: x, y_ft: y });
-        if (bed) select(bed.id);
+        const bed = await newBedSheet({ x_ft: snap(cam.x), y_ft: snap(cam.y) });
+        if (bed) select({ type: 'bed', id: bed.id });
       } }, icon('plus', 16), 'Bed'),
+      h('button.btn.sm', { onclick: addStructure }, icon('plus', 16), 'House / path'),
       h('button.btn.sm', { onclick: fit }, 'Fit'),
-      arrange ? h('span.hint.px.flat', 'Drag beds to move. Select one to rotate.') : null,
+      prefs.hinted ? null : h('span.hint.px.flat', 'Hold to move · right-click or long-press for lock & rotate',
+        h('button.btn.ghost.sm', { 'aria-label': 'Dismiss tip', onclick: () => { prefs.hinted = true; savePrefs(); renderHud(); } }, icon('close', 16))),
     );
   }
 
-  function select(id) {
-    selected = id;
+  function select(sel) {
+    selected = sel;
     renderCard();
     invalidate();
   }
 
   function renderCard() {
-    const bed = state().beds.find(b => b.id === selected);
-    card.hidden = !bed;
-    if (!bed) return;
+    const it = itemOf(selected);
+    card.hidden = !it;
+    if (!it) return;
+    const lockBtn = h('button.btn.sm', { onclick: () => updateItem(selected, { locked: !it.locked }) },
+      icon(it.locked ? 'lock' : 'unlock', 16), it.locked ? 'Locked' : 'Lock');
+    if (selected.type === 'struct') {
+      fill(card,
+        h('h3', it.name || STRUCTURE_KINDS[it.kind]),
+        h('div.small.muted', `${STRUCTURE_KINDS[it.kind] || it.kind} · ${fmtFt(it.w)} × ${fmtFt(it.h)} · ${Math.round(it.rotation || 0)}°`),
+        h('p.small.muted', it.locked ? 'Locked in place.' : 'Hold to move. Drag the yellow corner to resize.'),
+        h('div.row.wrap', h('button.btn.sm.primary', { onclick: () => editStructure(it) }, icon('edit', 16), 'Edit'), lockBtn));
+      return;
+    }
     const custom = store.customPlants();
-    const here = state().plantings.filter(p => p.bed_id === bed.id && !['done', 'failed'].includes(p.status));
+    const here = state().plantings.filter(p => p.bed_id === it.id && !['done', 'failed'].includes(p.status));
     const kinds = [...new Set(here.map(p => p.plant_key))];
-    const rotate = d => store.updateBed(bed.id, { rotation_deg: ((bed.rotation_deg || 0) + d + 360) % 360 });
-    fill(card, 
-      h('h3', bed.name),
-      h('div.small.muted', `${fmtFt(bed.length_ft)} × ${fmtFt(bed.width_ft)}${bed.area ? ` · ${bed.area}` : ''} · ${here.length} planting${here.length === 1 ? '' : 's'}`),
+    fill(card,
+      h('h3', it.name),
+      h('div.small.muted', `${fmtFt(it.length_ft)} × ${fmtFt(it.width_ft)}${it.area ? ` · ${it.area}` : ''} · ${here.length} planting${here.length === 1 ? '' : 's'}`),
       kinds.length ? h('div.sprites', kinds.slice(0, 14).map(k => plantSprite(k, custom, { size: 32 }))) : h('p.small.muted', 'Empty bed.'),
       h('div.row.wrap',
-        h('a.btn.primary.sm', { href: `#/bed/${bed.id}` }, icon('bed', 16), 'Open'),
-        arrange ? h('button.btn.sm', { 'aria-label': 'Rotate left 15°', onclick: () => rotate(-15) }, '⟲ 15°') : null,
-        arrange ? h('button.btn.sm', { 'aria-label': 'Rotate right 15°', onclick: () => rotate(15) }, '⟳ 15°') : null,
-        h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), 'Edit')),
-    );
+        h('a.btn.primary.sm', { href: `#/bed/${it.id}` }, icon('bed', 16), 'Open'),
+        h('button.btn.sm', { onclick: () => editBedSheet(it) }, icon('edit', 16), 'Edit'),
+        lockBtn));
   }
 
   // ---------------------------------------------------------- lifecycle
+
+  // Older gardens may carry structures without ids (v1 import); give them one so they're editable.
+  if (structures().some(s => !s.id)) saveStructures(structures().map(s => ({ id: crypto.randomUUID(), locked: false, ...s })));
 
   const ro = new ResizeObserver(() => resize());
   ro.observe(view);
@@ -449,7 +695,7 @@ export function mount(main) {
   document.fonts?.load('8px Silkscreen').then(invalidate, () => {});
 
   const unsub = store.watch(s => [s.garden, s.beds, s.plantings, s.custom], () => {
-    if (gesture?.kind === 'bed') return;
+    if (gesture && ['drag', 'resize'].includes(gesture.kind)) return;
     renderHud();
     renderCard();
     invalidate();
@@ -460,6 +706,8 @@ export function mount(main) {
   return () => {
     unsub();
     ro.disconnect();
+    document.removeEventListener('pointerdown', onDocDown, true);
+    document.removeEventListener('keydown', onKey);
     main.style.overflow = '';
   };
 }
