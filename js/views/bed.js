@@ -122,7 +122,7 @@ export function mount(main, bedId) {
     const avail = (bed.shape === 'round' ? wrap.parentElement.clientWidth : wrap.clientWidth) - 36;
     const maxH = Math.max(180, innerHeight * 0.55);
     // Small things (pots) get zoomed in further so the plant is actually visible.
-    const cap = bed.length_ft <= 2.5 ? 300 : 160;
+    const cap = bed.length_ft <= 2.5 ? 220 : 160;
     const ppf = Math.max(20, Math.min(cap, Math.floor(Math.min(avail / bed.length_ft, maxH / bed.width_ft))));
     const W = Math.round(bed.length_ft * ppf), H = Math.round(bed.width_ft * ppf);
     Object.assign(soil.style, {
@@ -146,12 +146,14 @@ export function mount(main, bedId) {
 
     const today = todayStr();
     let focusEl = null;
+    // Never draw a plant bigger than its bed (in a pot, keep a rim of soil showing).
+    const maxSprite = Math.floor((Math.min(bed.length_ft, bed.width_ft) * ppf * (isPot(bed) ? 0.8 : 1)) / 8) * 8;
     for (const p of plantings) {
       if (p.x_ft == null) continue;
       const plant = getPlant(p.plant_key, custom());
       const units = unitPositions(p, bed, spacingFtOf(plant));
       units.forEach(([x, y], i) => {
-        const el = plantEl(p, plant, i, x, y, ppf, today, clash.has(p.id), friend.has(p.id));
+        const el = plantEl(p, plant, i, x, y, ppf, today, clash.has(p.id), friend.has(p.id), maxSprite, isPot(bed));
         soil.append(el);
         if (ui.selected === p.id && i === 0) focusEl = el;
       });
@@ -160,11 +162,11 @@ export function mount(main, bedId) {
     bindSoil(bed, soil, ppf);
   }
 
-  function plantEl(p, plant, i, x, y, ppf, today, isClash, isFriend) {
+  function plantEl(p, plant, i, x, y, ppf, today, isClash, isFriend, maxSprite, inPot) {
     const pr = progress(p, plant, today);
     const spacingFt = spacingFtOf(plant);
     // Sprite fills the plant's spacing footprint (in 8px steps so the pixels stay even).
-    const size = Math.max(24, Math.min(2 * ppf, Math.floor((spacingFt * ppf) / 8) * 8));
+    const size = Math.max(24, Math.min(2 * ppf, maxSprite, Math.floor((spacingFt * ppf) / 8) * 8));
     const cls = ['plant', p.status === 'planned' && 'planned', ui.selected === p.id && 'selected', pr.stage === 'ready' && 'ready',
       isClash && 'clash', !isClash && isFriend && 'friend', p.locked && 'locked'].filter(Boolean).join('.');
     const key = pr.stage === 'started' ? 'seedling' : plant.sprite;
@@ -176,7 +178,8 @@ export function mount(main, bedId) {
       dataset: { id: p.id, i: String(i) },
       style: { left: `${x * ppf}px`, top: `${y * ppf}px`, width: `${size}px`, height: `${size}px` },
     },
-    ui.selected === p.id ? h('i.ring', { style: { width: `${spacingFt * ppf}px`, height: `${spacingFt * ppf}px` } }) : null,
+    // Spacing ring (skipped in pots, where the pot itself is the plant's space).
+    ui.selected === p.id && !inPot ? h('i.ring', { style: { width: `${spacingFt * ppf}px`, height: `${spacingFt * ppf}px` } }) : null,
     h('img', { src: spriteURL(key, plant.tint), alt: '' }),
     pr.stage === 'ready' ? h('i.spark') : null);
   }

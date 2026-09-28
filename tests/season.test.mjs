@@ -113,3 +113,13 @@ test('timeline builds indoor/growing/harvest segments', () => {
   assert.deepEqual(rows[0].segments.map(s => s.kind), ['indoors', 'growing', 'harvest']);
   assert.equal(rows[0].segments[0].end, '2026-05-15');
 });
+
+test('pot capacity: one plant fills a pot, round area is pi r^2', () => {
+  const pot = { id: 'pot', kind: 'container', shape: 'round', length_ft: 1, width_ft: 1 };
+  const one = bedCapacity(pot, [P({ bed_id: 'pot', plant_key: 'pumpkin' })]);
+  assert.ok(Math.abs(one.pct - 1) < 1e-9, `one pumpkin = 100%, got ${one.pct}`);
+  const two = bedCapacity(pot, [P({ bed_id: 'pot', plant_key: 'pumpkin', qty: 2 })]);
+  assert.ok(Math.abs(two.pct - 2) < 1e-9);
+  const ring = bedCapacity({ id: 'r', shape: 'round', length_ft: 3.5, width_ft: 3.5 }, []);
+  assert.ok(Math.abs(ring.areaSqFt - Math.PI * 1.75 ** 2) < 1e-9);
+});

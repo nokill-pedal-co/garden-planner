@@ -319,11 +319,15 @@ export function rotationIssues(bed, plantings, season, custom) {
 
 /** Square-foot footprint of what's in a bed vs its area. */
 export function bedCapacity(bed, plantings, custom) {
-  const areaSqFt = bed.length_ft * bed.width_ft;
+  const areaSqFt = bed.shape === 'round' ? (Math.PI / 4) * bed.length_ft * bed.width_ft : bed.length_ft * bed.width_ft;
+  const pot = bed.kind === 'container';
   let usedSqFt = 0;
   for (const p of plantings) {
     if (p.bed_id !== bed.id || ['done', 'failed'].includes(p.status)) continue;
-    usedSqFt += footprintSqFt(getPlant(p.plant_key, custom)) * (p.qty || 1);
+    // A pot is sized for its plant (a pumpkin in a pot vines out over the edge), so one plant
+    // fills at most the whole pot: 1 pumpkin = 100%, 2 plants in a pot = 200%.
+    const fp = footprintSqFt(getPlant(p.plant_key, custom));
+    usedSqFt += (pot ? Math.min(fp, areaSqFt) : fp) * (p.qty || 1);
   }
   return { usedSqFt, areaSqFt, pct: areaSqFt ? usedSqFt / areaSqFt : 0 };
 }
