@@ -288,6 +288,20 @@ export function importV1(db, exported = null, opts = {}) {
       });
       continue;
     }
+    if (kind === 'ground' && c.plants.reduce((n, dp) => n + (dp.quantity || 1), 0) > 1) {
+      // In-ground shrubs (the blueberry patch): one round patch per bush, sized to its spacing.
+      c.plants.forEach((dp, k) => {
+        const qty = dp.quantity || 1;
+        for (let q = 0; q < qty; q++) {
+          const hit = findPlantByName(fixMojibake(dp.name));
+          const dia = Math.max(1.5, Math.round(((hit?.plant.spacingIn || 24) / 12) * 2) / 2);
+          const name = `${fixMojibake(dp.name)}${qty > 1 ? ` #${q + 1}` : ''}`;
+          const bed = addBed(`${v1id}_${k}_${q}`, { ...c, name, shape: 'round', dimensions: { length: dia, width: dia } }, 'ground');
+          autoLayout(bed, [addPlanting({ ...dp, quantity: 1 }, bed)]);
+        }
+      });
+      continue;
+    }
     const bed = addBed(v1id, c, kind);
     autoLayout(bed, c.plants.map(dp => addPlanting(dp, bed)));
   }

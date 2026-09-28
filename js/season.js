@@ -2,7 +2,7 @@
 // Pure. Dates are 'YYYY-MM-DD' strings treated as calendar days (UTC math, no timezones).
 
 import { getPlant } from './plants.js';
-import { distance } from './geo.js';
+import { distance, isSolo } from './geo.js';
 
 const DAY = 86_400_000;
 // A transplant-counted crop sown indoors spends about this long as a start before going out.
@@ -320,7 +320,7 @@ export function rotationIssues(bed, plantings, season, custom) {
 /** Square-foot footprint of what's in a bed vs its area. */
 export function bedCapacity(bed, plantings, custom) {
   const areaSqFt = bed.shape === 'round' ? (Math.PI / 4) * bed.length_ft * bed.width_ft : bed.length_ft * bed.width_ft;
-  const pot = bed.kind === 'container';
+  const pot = isSolo(bed);
   let usedSqFt = 0;
   for (const p of plantings) {
     if (p.bed_id !== bed.id || ['done', 'failed'].includes(p.status)) continue;

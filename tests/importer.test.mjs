@@ -28,6 +28,9 @@ test('imports the real v1 database', () => {
   assert.ok(pots.every(b => b.shape === 'round' && b.volume_gal > 0), 'pots are round with a gallon size');
   assert.ok(!beds.some(b => /fabric pots|grow bags/i.test(b.name)), 'grouped pot entries are split into single pots');
   assert.ok(pots.every(b => plantings.filter(p => p.bed_id === b.id).length >= 1));
+  const bushes = beds.filter(b => b.kind === 'ground');
+  assert.ok(bushes.length >= 4 && bushes.every(b => b.shape === 'round' && plantings.filter(p => p.bed_id === b.id).length === 1),
+    'in-ground blueberries are one round patch each');
   assert.deepEqual(report.unmatched, [], `unmatched: ${report.unmatched.join(', ')}`);
   for (const p of plantings) {
     assert.equal(p.garden_id, garden.id);

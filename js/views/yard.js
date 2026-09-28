@@ -10,7 +10,7 @@ import * as store from '../store.js';
 import { h, icon, fill, toast } from '../ui.js';
 import { spriteCanvas } from '../sprites.js';
 import { getPlant } from '../plants.js';
-import { bedCorners, bedOutline, structureCorners, scaleStructure, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng, rotate, unitPositions } from '../geo.js';
+import { isSolo, bedCorners, bedOutline, structureCorners, scaleStructure, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng, rotate, unitPositions } from '../geo.js';
 import { spacingFtOf } from './bed.js';
 import { editBedSheet, newBedSheet, structureSheet, STRUCTURE_KINDS } from './common.js';
 import { progress, todayStr } from '../season.js';
@@ -84,12 +84,12 @@ export function mount(main) {
     const spriteFt = (ppf() >= 16 ? 16 : 8) / ppf();
     for (let i = beds.length - 1; i >= 0; i--) {
       const b = beds[i];
-      if (b.kind !== 'container') continue;
+      if (!isSolo(b)) continue;
       const r = Math.max(b.length_ft, spriteFt) / 2 + 2 / ppf();
       if (Math.hypot(x - b.x_ft, y - b.y_ft) <= r) return { type: 'bed', id: b.id };
     }
     for (let i = beds.length - 1; i >= 0; i--) {
-      if (beds[i].kind === 'container') continue;
+      if (isSolo(beds[i])) continue;
       if (pointInPolygon([x, y], bedOutline(beds[i]))) return { type: 'bed', id: beds[i].id };
     }
     const ss = structures();
@@ -345,7 +345,7 @@ export function mount(main) {
   function drawLabel(bed) {
     if (ppf() < 4) return;
     // Pots sit close together; their names would pile up, so only the selected pot is labelled.
-    if (bed.kind === 'container' && !(selected?.type === 'bed' && selected.id === bed.id)) return;
+    if (isSolo(bed) && !(selected?.type === 'bed' && selected.id === bed.id)) return;
     const b = bbox(bedOutline(bed));
     const [cx] = toScreen((b.minX + b.maxX) / 2, 0);
     const [, top] = toScreen(0, b.minY);

@@ -145,3 +145,11 @@ export function unitPositions(planting, bed, spacingFt) {
   }
   return out;
 }
+
+/**
+ * A bed that holds a single plant and moves as one with it: a pot, or a round in-ground patch
+ * such as a blueberry bush. The plant stays centred; you move the bed, not the plant.
+ */
+export function isSolo(bed) {
+  return bed?.kind === 'container' || (bed?.kind === 'ground' && bed?.shape === 'round');
+}

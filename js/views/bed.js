@@ -9,12 +9,12 @@ import { getPlant, allPlants, CATEGORIES } from '../plants.js';
 import {
   progress, displayName, todayStr, companionIssues, rotationIssues, bedCapacity, expectedHarvest, prettyDate,
 } from '../season.js';
-import { unitPositions } from '../geo.js';
+import { unitPositions, isSolo } from '../geo.js';
 import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, STATUS_LABELS } from './common.js';
 import { fmtFt } from './yard.js';
 
 const LAST_BED = 'gp2.lastBed';
-const isPot = bed => bed?.kind === 'container';
+const isPot = isSolo; // pots and single-plant patches behave the same here
 const SNAP = 1 / 12;   // ft: placement snaps to the inch, i.e. effectively free
 const KEY_STEP = 0.25; // ft per arrow-key press
 
@@ -74,7 +74,7 @@ export function mount(main, bedId) {
         h('div', { style: { width: '220px' } },
           h('div.small.muted', `Space used ${Math.round(cap.usedSqFt * 10) / 10} / ${Math.round(cap.areaSqFt * 10) / 10} sq ft`),
           h(`div.meter${cap.pct > 1 ? '.over' : ''}`, h('i', { style: { width: `${Math.min(100, Math.round(cap.pct * 100))}%` } }), h('b', `${Math.round(cap.pct * 100)}%`))),
-        h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), isPot(bed) ? 'Edit pot' : 'Edit bed'),
+        h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), bed.kind === 'container' ? 'Edit pot' : 'Edit bed'),
       ),
       h('div.bed-layout',
         h('div.stack', stage(bed, plantings, issues), issuesCard(issues, rot, cap)),
@@ -85,16 +85,16 @@ export function mount(main, bedId) {
 
   function bedTabs(active) {
     const all = state().beds.filter(b => !b.archived);
-    const beds = all.filter(b => b.kind !== 'container');
-    const pots = all.filter(b => b.kind === 'container').sort((a, b) => a.name.localeCompare(b.name));
+    const beds = all.filter(b => !isSolo(b));
+    const pots = all.filter(isSolo).sort((a, b) => a.name.localeCompare(b.name));
     // Pots get their own picker so thirty of them don't crowd out the beds.
     const potPicker = pots.length ? h('select.pot-picker', {
       'aria-label': 'Pots',
       onchange: e => { if (e.target.value) location.hash = `#/bed/${e.target.value}`; },
     },
-    h('option', { value: '' }, `Pots (${pots.length})…`),
+    h('option', { value: '' }, `Pots & shrubs (${pots.length})…`),
     pots.map(b => h('option', { value: b.id, selected: b.id === active?.id }, b.name))) : null;
-    if (potPicker && active?.kind === 'container') potPicker.classList.add('active');
+    if (potPicker && isSolo(active)) potPicker.classList.add('active');
     return h('div.bed-tabs', { role: 'tablist', 'aria-label': 'Beds' },
       beds.map(b => h(`a.btn.sm${b.id === active?.id ? '.primary' : ''}`, {
         href: `#/bed/${b.id}`, role: 'tab', 'aria-selected': String(b.id === active?.id),
@@ -165,8 +165,11 @@ export function mount(main, bedId) {
   function plantEl(p, plant, i, x, y, ppf, today, isClash, isFriend, maxSprite, inPot) {
     const pr = progress(p, plant, today);
     const spacingFt = spacingFtOf(plant);
-    // Sprite fills the plant's spacing footprint (in 8px steps so the pixels stay even).
-    const size = Math.max(24, Math.min(2 * ppf, maxSprite, Math.floor((spacingFt * ppf) / 8) * 8));
+    // Every plant gets the same icon size (a whole-number multiple of the 16px sprite, so pixels
+    // stay crisp); spacing is shown by the ring and the space meter instead. A lone plant in a
+    // pot or patch fills it.
+    const uniform = Math.max(32, Math.min(64, Math.round((ppf * 0.6) / 16) * 16));
+    const size = inPot ? maxSprite : Math.min(uniform, maxSprite);
     const cls = ['plant', p.status === 'planned' && 'planned', ui.selected === p.id && 'selected', pr.stage === 'ready' && 'ready',
       isClash && 'clash', !isClash && isFriend && 'friend', p.locked && 'locked'].filter(Boolean).join('.');
     const key = pr.stage === 'started' ? 'seedling' : plant.sprite;
