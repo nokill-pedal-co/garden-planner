@@ -2,12 +2,12 @@
 // and scaled up with image-rendering: pixelated, so everything — including the optional satellite
 // photo underlay — comes out chunky. World units are feet; see ARCHITECTURE.md "Coordinates".
 //
-// Interaction: drag empty ground to pan, wheel/pinch to zoom. Hold a bed or structure (~0.3s) to
-// pick it up and drag it. Right-click (or long-press and release) for its menu: lock, rotate, edit.
-// A selected structure shows a corner handle for resizing.
+// Interaction: drag to pan, wheel/pinch to zoom. Tap a bed or structure to select it: a toolbar
+// appears beside it (open, lock, rotate, edit, resize for rectangles) and the selection can then be
+// dragged. Nothing moves unless it's selected first, so panning never nudges a bed by accident.
 
 import * as store from '../store.js';
-import { h, icon, plantSprite, fill, toast, confirmSheet } from '../ui.js';
+import { h, icon, fill, toast } from '../ui.js';
 import { spriteCanvas } from '../sprites.js';
 import { getPlant } from '../plants.js';
 import { bedCorners, structureCorners, scaleStructure, bedToGarden, pointInPolygon, bbox, toLatLng, fromLatLng, rotate } from '../geo.js';
@@ -43,12 +43,11 @@ export function mount(main) {
   const canvas = h('canvas.world', { 'aria-label': 'Yard map. Beds are listed in the Beds tab.' });
   const ctx = canvas.getContext('2d');
   const hud = h('div.hud');
-  const card = h('div.bed-card.px', { hidden: true });
-  const menu = h('div.ctx-menu.px', { hidden: true, role: 'menu' });
+  const bar = h('div.sel-bar.px', { hidden: true, role: 'toolbar', 'aria-label': 'Selected item' });
   const zoomBox = h('div.zoom',
     h('button.btn.icon', { 'aria-label': 'Zoom in', onclick: () => zoomBy(1) }, icon('plus', 24)),
     h('button.btn.icon', { 'aria-label': 'Zoom out', onclick: () => zoomBy(-1) }, h('b', { style: { fontSize: '22px' } }, '–')));
-  view.append(canvas, hud, card, zoomBox, menu);
+  view.append(canvas, hud, bar, zoomBox);
   main.append(view);
   main.style.overflow = 'hidden';
 
@@ -226,6 +225,7 @@ export function mount(main) {
     for (const s of structures()) drawStructureLabel(s);
     for (const bed of beds) drawLabel(bed);
     drawSelection();
+    placeBar();
   }
 
   /** Run `fn` with the context in the item's local frame: origin at its centre, x along its length, 1 unit = 1 ft. */
@@ -340,10 +340,10 @@ export function mount(main) {
     const it = itemOf(selected);
     if (!it) return;
     path(cornersOf(selected.type, it));
-    ctx.strokeStyle = gesture?.armed ? COLORS.label : COLORS.select;
+    ctx.strokeStyle = COLORS.select;
     ctx.lineWidth = 2;
     ctx.stroke();
-    if (selected.type === 'struct' && !it.locked) {
+    if (resizing && canResize(it)) {
       const [hx, hy] = toScreen(...handlePos(it));
       ctx.fillStyle = COLORS.select;
       ctx.fillRect(hx - 3, hy - 3, 6, 6);
@@ -406,34 +406,35 @@ export function mount(main) {
   }
 
   // ---------------------------------------------------------- input
+  //
+  // Tap selects (bed or structure) and shows the selection toolbar. Dragging a selected, unlocked
+  // item moves it right away; dragging anything else pans. Double-tap a bed to open it.
+  // Right-click also selects. Two fingers pinch-zoom.
 
   const pointers = new Map();
   let gesture = null;
   let lastTap = null;
+  let resizing = false;             // toolbar "Resize" toggle (rectangular structures only)
   const snap = v => Math.round(v * 2) / 2;
-
-  function cancelHold() {
-    clearTimeout(gesture?.timer);
-  }
+  const slop = e => (e.pointerType === 'touch' ? 10 : 5);
+  const canResize = it => selected?.type === 'struct' && it && !it.locked && !it.points?.length;
+  const isSelected = hit => hit && selected && hit.type === selected.type && hit.id === selected.id;
 
   canvas.addEventListener('pointerdown', e => {
-    if (e.button === 2) return; // right-click: handled by contextmenu
-    closeMenu();
+    if (e.button === 2) return;
     try { canvas.setPointerCapture(e.pointerId); } catch { /* synthetic or already-released pointer */ }
     pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size === 2) {
-      cancelHold();
       const [a, b] = [...pointers.values()];
       gesture = { kind: 'pinch', dist: Math.hypot(a.x - b.x, a.y - b.y), zi };
       return;
     }
     const w = eventWorld(e);
-
-    // Resize handle of the selected structure: no hold needed.
     const sel = itemOf(selected);
-    if (selected?.type === 'struct' && sel && !sel.locked) {
+
+    if (resizing && canResize(sel)) {
       const [hx, hy] = handlePos(sel);
-      if (Math.hypot(w[0] - hx, w[1] - hy) * ppf() <= 7) {
+      if (Math.hypot(w[0] - hx, w[1] - hy) * ppf() * ART <= (e.pointerType === 'touch' ? 28 : 14)) {
         const fixed = rotate([sel.x - sel.w / 2, sel.y - sel.h / 2], sel.rotation || 0, [sel.x, sel.y]);
         gesture = { kind: 'resize', id: sel.id, fixed, orig: { ...sel }, moved: false };
         return;
@@ -441,17 +442,12 @@ export function mount(main) {
     }
 
     const hit = hitItem(w);
-    gesture = { kind: 'press', hit, sx: e.clientX, sy: e.clientY, cam: { ...cam }, w0: w, armed: false, moved: false, pointerType: e.pointerType };
-    if (hit) {
-      gesture.timer = setTimeout(() => {
-        if (gesture?.kind !== 'press' || gesture.hit !== hit) return;
-        gesture.armed = true;
-        select(hit);
-        navigator.vibrate?.(12);
-        canvas.style.cursor = itemOf(hit)?.locked ? 'not-allowed' : 'move';
-        invalidate();
-      }, HOLD_MS);
-    }
+    const it = itemOf(hit);
+    const movable = isSelected(hit) && it && !it.locked;
+    gesture = {
+      kind: movable ? 'maybe-drag' : 'maybe-pan', hit, sx: e.clientX, sy: e.clientY, cam: { ...cam }, w0: w,
+      offset: it ? [posOf(hit.type, it)[0] - w[0], posOf(hit.type, it)[1] - w[1]] : null,
+    };
   });
 
   canvas.addEventListener('pointermove', e => {
@@ -468,19 +464,14 @@ export function mount(main) {
       return;
     }
 
-    if (gesture.kind === 'press') {
-      const dist = Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy);
-      if (dist < SLOP_PX) return;
-      cancelHold();
-      const it = gesture.armed ? itemOf(gesture.hit) : null;
-      if (it && !it.locked) {
-        const [px, py] = posOf(gesture.hit.type, it);
-        gesture = { ...gesture, kind: 'drag', dx: px - gesture.w0[0], dy: py - gesture.w0[1] };
-      } else {
-        if (it?.locked) toast(`${it.name || 'It'} is locked. Right-click or long-press to unlock.`);
-        gesture = { ...gesture, kind: 'pan' };
-        canvas.classList.add('dragging');
+    if (gesture.kind.startsWith('maybe-')) {
+      if (Math.hypot(e.clientX - gesture.sx, e.clientY - gesture.sy) < slop(e)) return;
+      if (gesture.kind === 'maybe-pan' && gesture.hit && isSelected(gesture.hit) && itemOf(gesture.hit)?.locked && !gesture.warned) {
+        gesture.warned = true;
+        toast('Locked. Tap the lock in the toolbar to move it.');
       }
+      gesture.kind = gesture.kind === 'maybe-drag' ? 'drag' : 'pan';
+      if (gesture.kind === 'pan') canvas.classList.add('dragging');
     }
 
     if (gesture.kind === 'pan') {
@@ -490,7 +481,7 @@ export function mount(main) {
     } else if (gesture.kind === 'drag') {
       const [x, y] = eventWorld(e);
       const it = itemOf(gesture.hit);
-      const nx = snap(x + gesture.dx), ny = snap(y + gesture.dy);
+      const nx = snap(x + gesture.offset[0]), ny = snap(y + gesture.offset[1]);
       // Live preview: mutate the in-memory row; it's committed once on release.
       if (gesture.hit.type === 'bed') Object.assign(it, { x_ft: nx, y_ft: ny });
       else Object.assign(it, { x: nx, y: ny });
@@ -512,23 +503,16 @@ export function mount(main) {
   const end = e => {
     const wasPointer = pointers.delete(e.pointerId);
     canvas.classList.remove('dragging');
-    canvas.style.cursor = '';
     if (!gesture || !wasPointer) return;
     const g = gesture;
-    cancelHold();
-
-    if (g.kind === 'press') {
-      if (g.armed) {
-        // Long-press released without moving: show the item's menu (the touch "right-click").
-        openMenu(g.hit, e.clientX, e.clientY);
-      } else {
-        const now = Date.now();
-        const doubleTap = g.hit && lastTap && lastTap.hit?.id === g.hit.id && now - lastTap.t < 350;
-        lastTap = { hit: g.hit, t: now };
-        if (doubleTap && g.hit.type === 'bed') location.hash = `#/bed/${g.hit.id}`;
-        else if (doubleTap && g.hit.type === 'struct') editStructure(itemOf(g.hit));
-        else select(g.hit);
-      }
+    if (g.kind.startsWith('maybe-')) {
+      // A tap.
+      const now = Date.now();
+      const doubleTap = g.hit && lastTap?.hit && lastTap.hit.id === g.hit.id && now - lastTap.t < 350;
+      lastTap = { hit: g.hit, t: now };
+      if (doubleTap && g.hit.type === 'bed') location.hash = `#/bed/${g.hit.id}`;
+      else if (doubleTap && g.hit.type === 'struct') editStructure(itemOf(g.hit));
+      else select(g.hit);
     } else if (g.kind === 'drag' && g.moved) {
       const it = itemOf(g.hit);
       if (g.hit.type === 'bed') store.updateBed(it.id, { x_ft: it.x_ft, y_ft: it.y_ft });
@@ -546,12 +530,9 @@ export function mount(main) {
 
   canvas.addEventListener('contextmenu', e => {
     e.preventDefault();
-    cancelHold();
-    gesture = null;
-    const hit = hitItem(eventWorld(e));
-    if (!hit) return closeMenu();
-    select(hit);
-    openMenu(hit, e.clientX, e.clientY);
+    // Touch long-press also fires contextmenu; never let it interrupt a gesture.
+    if (gesture) return;
+    select(hitItem(eventWorld(e)));
   });
 
   canvas.addEventListener('wheel', e => {
@@ -559,54 +540,7 @@ export function mount(main) {
     zoomBy(e.deltaY < 0 ? 1 : -1, eventWorld(e));
   }, { passive: false });
 
-  // ---------------------------------------------------------- context menu
-
-  function openMenu(sel, clientX, clientY) {
-    const it = itemOf(sel);
-    if (!it) return;
-    const isBed = sel.type === 'bed';
-    const act = (label, fn, ic) => h('button.menu-item', { role: 'menuitem', onclick: () => { closeMenu(); fn(); } }, ic ? icon(ic, 16) : h('span.menu-pad'), label);
-    const items = [
-      h('div.menu-title.small', it.name || STRUCTURE_KINDS[it.kind]),
-      isBed ? act('Open bed', () => { location.hash = `#/bed/${it.id}`; }, 'bed') : null,
-      act(it.locked ? 'Unlock' : 'Lock in place', () => {
-        updateItem(sel, { locked: !it.locked });
-        toast(it.locked ? 'Unlocked' : 'Locked');
-      }, it.locked ? 'unlock' : 'lock'),
-      it.locked ? null : act('Rotate 15° left', () => rotateItem(sel, -15)),
-      it.locked ? null : act('Rotate 15° right', () => rotateItem(sel, 15)),
-      it.locked || isBed ? null : act('Rotate 1° left', () => rotateItem(sel, -1)),
-      it.locked || isBed ? null : act('Rotate 1° right', () => rotateItem(sel, 1)),
-      act('Edit…', () => (isBed ? editBedSheet(it) : editStructure(it)), 'edit'),
-      isBed ? null : act('Duplicate', () => {
-        const copy = { ...it, id: crypto.randomUUID(), x: it.x + 3, y: it.y + 3, locked: false };
-        saveStructures([...structures(), copy]);
-        select({ type: 'struct', id: copy.id });
-      }),
-      isBed ? null : act('Delete', async () => {
-        if (await confirmSheet(`Delete ${it.name || 'this structure'}?`, { ok: 'Delete', danger: true })) {
-          saveStructures(structures().filter(s => s.id !== it.id));
-          select(null);
-        }
-      }, 'trash'),
-    ];
-    fill(menu, items);
-    menu.hidden = false;
-    const r = view.getBoundingClientRect();
-    const mw = menu.offsetWidth, mh = menu.offsetHeight;
-    menu.style.left = `${Math.min(Math.max(4, clientX - r.left), r.width - mw - 8)}px`;
-    menu.style.top = `${Math.min(Math.max(4, clientY - r.top), r.height - mh - 8)}px`;
-    menu.querySelector('button')?.focus();
-  }
-
-  function closeMenu() {
-    menu.hidden = true;
-  }
-
-  const onDocDown = e => { if (!menu.hidden && !menu.contains(e.target)) closeMenu(); };
-  const onKey = e => { if (e.key === 'Escape') closeMenu(); };
-  document.addEventListener('pointerdown', onDocDown, true);
-  document.addEventListener('keydown', onKey);
+  // ---------------------------------------------------------- selection toolbar
 
   async function editStructure(s) {
     const res = await structureSheet(s);
@@ -626,7 +560,54 @@ export function mount(main) {
     select({ type: 'struct', id: s.id });
   }
 
-  // ---------------------------------------------------------- HUD + card
+  function renderBar() {
+    const it = itemOf(selected);
+    bar.hidden = !it;
+    if (!it) return;
+    const isBed = selected.type === 'bed';
+    const tool = (label, ic, fn, { pressed, text } = {}) => h('button.btn.sm', {
+      title: label, 'aria-label': label, ...(pressed !== undefined ? { 'aria-pressed': String(pressed) } : {}), onclick: fn,
+    }, ic ? icon(ic, 16) : null, text ?? null);
+    const locked = !!it.locked;
+    const here = isBed ? state().plantings.filter(p => p.bed_id === it.id && !['done', 'failed'].includes(p.status)).length : 0;
+    fill(bar,
+      h('div.sel-title',
+        h('b', it.name || STRUCTURE_KINDS[it.kind]),
+        h('span.small.muted', isBed
+          ? `${fmtFt(it.length_ft)} × ${fmtFt(it.width_ft)} · ${here} planting${here === 1 ? '' : 's'}`
+          : `${STRUCTURE_KINDS[it.kind] || it.kind}${it.points?.length ? ' · outline' : ` · ${fmtFt(it.w)} × ${fmtFt(it.h)}`}`),
+        h('span.small.sel-hint', locked ? 'Locked' : 'Drag to move')),
+      h('div.sel-tools',
+        isBed ? h('a.btn.sm.primary', { href: `#/bed/${it.id}`, title: 'Open bed' }, icon('bed', 16), 'Open') : null,
+        tool(locked ? 'Unlock' : 'Lock in place', 'lock', () => {
+          resizing = false;
+          updateItem(selected, { locked: !locked });
+        }, { pressed: locked, text: locked ? 'Locked' : 'Lock' }),
+        locked ? null : tool('Rotate left 15°', null, () => rotateItem(selected, -15), { text: '⟲' }),
+        locked ? null : tool('Rotate right 15°', null, () => rotateItem(selected, 15), { text: '⟳' }),
+        canResize(it) ? tool('Resize', null, () => { resizing = !resizing; renderBar(); invalidate(); }, { pressed: resizing, text: '⤡' }) : null,
+        tool('Edit', 'edit', () => (isBed ? editBedSheet(it) : editStructure(it))),
+        tool('Deselect', 'close', () => select(null))));
+    placeBar();
+  }
+
+  /** Keep the toolbar next to the selection: above it, or below when there's no room. */
+  function placeBar() {
+    const it = itemOf(selected);
+    if (!it || bar.hidden) return;
+    const b = bbox(cornersOf(selected.type, it));
+    const [x0, y0] = toScreen(b.minX, b.minY);
+    const [x1, y1] = toScreen(b.maxX, b.maxY);
+    const vw = view.clientWidth, vh = view.clientHeight;
+    const bw = bar.offsetWidth, bh = bar.offsetHeight;
+    const cx = ((x0 + x1) / 2) * ART;
+    let top = y0 * ART - bh - 12;
+    if (top < 56) top = y1 * ART + 12;
+    bar.style.left = `${Math.max(8, Math.min(vw - bw - 8, cx - bw / 2))}px`;
+    bar.style.top = `${Math.max(56, Math.min(vh - bh - 8, top))}px`;
+  }
+
+  // ---------------------------------------------------------- HUD
 
   function renderHud() {
     const g = state().garden;
@@ -644,42 +625,16 @@ export function mount(main) {
       } }, icon('plus', 16), 'Bed'),
       h('button.btn.sm', { onclick: addStructure }, icon('plus', 16), 'House / path'),
       h('button.btn.sm', { onclick: fit }, 'Fit'),
-      prefs.hinted ? null : h('span.hint.px.flat', 'Hold to move · right-click or long-press for lock & rotate',
-        h('button.btn.ghost.sm', { 'aria-label': 'Dismiss tip', onclick: () => { prefs.hinted = true; savePrefs(); renderHud(); } }, icon('close', 16))),
+      prefs.hinted2 ? null : h('span.hint.px.flat', 'Tap a bed to select it, then drag to move',
+        h('button.btn.ghost.sm', { 'aria-label': 'Dismiss tip', onclick: () => { prefs.hinted2 = true; savePrefs(); renderHud(); } }, icon('close', 16))),
     );
   }
 
   function select(sel) {
+    if (!sel || !isSelected(sel)) resizing = false;
     selected = sel;
-    renderCard();
+    renderBar();
     invalidate();
-  }
-
-  function renderCard() {
-    const it = itemOf(selected);
-    card.hidden = !it;
-    if (!it) return;
-    const lockBtn = h('button.btn.sm', { onclick: () => updateItem(selected, { locked: !it.locked }) },
-      icon(it.locked ? 'lock' : 'unlock', 16), it.locked ? 'Locked' : 'Lock');
-    if (selected.type === 'struct') {
-      fill(card,
-        h('h3', it.name || STRUCTURE_KINDS[it.kind]),
-        h('div.small.muted', `${STRUCTURE_KINDS[it.kind] || it.kind} · ${fmtFt(it.w)} × ${fmtFt(it.h)} · ${Math.round(it.rotation || 0)}°`),
-        h('p.small.muted', it.locked ? 'Locked in place.' : 'Hold to move. Drag the yellow corner to resize.'),
-        h('div.row.wrap', h('button.btn.sm.primary', { onclick: () => editStructure(it) }, icon('edit', 16), 'Edit'), lockBtn));
-      return;
-    }
-    const custom = store.customPlants();
-    const here = state().plantings.filter(p => p.bed_id === it.id && !['done', 'failed'].includes(p.status));
-    const kinds = [...new Set(here.map(p => p.plant_key))];
-    fill(card,
-      h('h3', it.name),
-      h('div.small.muted', `${fmtFt(it.length_ft)} × ${fmtFt(it.width_ft)}${it.area ? ` · ${it.area}` : ''} · ${here.length} planting${here.length === 1 ? '' : 's'}`),
-      kinds.length ? h('div.sprites', kinds.slice(0, 14).map(k => plantSprite(k, custom, { size: 32 }))) : h('p.small.muted', 'Empty bed.'),
-      h('div.row.wrap',
-        h('a.btn.primary.sm', { href: `#/bed/${it.id}` }, icon('bed', 16), 'Open'),
-        h('button.btn.sm', { onclick: () => editBedSheet(it) }, icon('edit', 16), 'Edit'),
-        lockBtn));
   }
 
   // ---------------------------------------------------------- lifecycle
@@ -697,7 +652,7 @@ export function mount(main) {
   const unsub = store.watch(s => [s.garden, s.beds, s.plantings, s.custom], () => {
     if (gesture && ['drag', 'resize'].includes(gesture.kind)) return;
     renderHud();
-    renderCard();
+    renderBar();
     invalidate();
   });
 
@@ -706,8 +661,6 @@ export function mount(main) {
   return () => {
     unsub();
     ro.disconnect();
-    document.removeEventListener('pointerdown', onDocDown, true);
-    document.removeEventListener('keydown', onKey);
     main.style.overflow = '';
   };
 }

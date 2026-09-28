@@ -102,11 +102,14 @@ export function structureSheet(s = null) {
         },
       })),
       field('Label', h('input', { type: 'text', name: 'name', value: s?.name || '', placeholder: 'House' })),
-      field('Length (ft)', h('input', { type: 'number', name: 'w', value: s?.w ?? 40, min: 1, step: 0.5 })),
-      field('Width (ft)', h('input', { type: 'number', name: 'h', value: s?.h ?? 30, min: 1, step: 0.5 })),
+      // Footprint outlines (from OpenStreetMap) keep their real shape: move/rotate only.
+      s?.points?.length ? h('input', { type: 'hidden', name: 'w', value: s.w }) : field('Length (ft)', h('input', { type: 'number', name: 'w', value: s?.w ?? 40, min: 1, step: 0.5 })),
+      s?.points?.length ? h('input', { type: 'hidden', name: 'h', value: s.h }) : field('Width (ft)', h('input', { type: 'number', name: 'h', value: s?.h ?? 30, min: 1, step: 0.5 })),
       field('Rotation (°)', h('input', { type: 'number', name: 'rotation', value: s?.rotation ?? 0, step: 1 })),
     ),
-    h('p.small.muted', 'Tip: turn on Photo in the yard, then hold-and-drag to move it and drag the corner handle to size it.'),
+    h('p.small.muted', s?.points?.length
+      ? 'This is a real building outline, so its shape stays fixed. Select it in the yard and drag to move it.'
+      : 'Tip: turn on Photo in the yard, select it, drag to move, and use Resize (⤡) to size it.'),
     h('div.actions',
       h('button.btn.primary', { type: 'submit' }, s ? 'Save' : 'Add'),
       s ? h('button.btn.danger', { type: 'button', onclick: () => close('delete') }, icon('trash', 16), 'Delete') : null,
