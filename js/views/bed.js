@@ -73,12 +73,13 @@ export function mount(main, bedId) {
           h('h1', bed.name),
           h('div.small.muted', `${size} · ${bed.area || 'No area'} · ${plants} plant${plants === 1 ? '' : 's'}`)),
         h('div', { style: { width: '220px' } },
-          h('div.small.muted', `Space used ${Math.round(cap.usedSqFt * 10) / 10} / ${Math.round(cap.areaSqFt * 10) / 10} sq ft`),
+          h('div.small.muted', { title: 'Each plant counts its spacing squared; vines count only their base; finished crops are not counted.' },
+            `Space used ${Math.round(cap.usedSqFt * 10) / 10} / ${Math.round(cap.areaSqFt * 10) / 10} sq ft`),
           h(`div.meter${cap.pct > 1 ? '.over' : ''}`, h('i', { style: { width: `${Math.min(100, Math.round(cap.pct * 100))}%` } }), h('b', `${Math.round(cap.pct * 100)}%`))),
         h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), bed.kind === 'container' ? 'Edit pot' : 'Edit bed'),
       ),
       h('div.bed-layout',
-        h('div.stack', stage(bed, plantings, issues), issuesCard(issues, rot, cap)),
+        h('div.stack', stage(bed, plantings, issues), issuesCard(issues, rot, cap, bed)),
         h('div.stack', selectedCard(bed), paletteCard(), trayCard(season)),
       ),
     );
@@ -405,13 +406,27 @@ export function mount(main, bedId) {
         h('input', { type: 'checkbox', checked: ui.showDone, onchange: e => { ui.showDone = e.target.checked; render(); } }), 'Show finished plantings in bed'));
   }
 
-  function issuesCard(issues, rot, cap) {
+  function issuesCard(issues, rot, cap, bed) {
     const items = [];
+    // Over capacity is usually finished crops that were never marked done: offer to clear them.
+    const today = todayStr();
+    const finished = cap.pct > 1.05 ? state().plantings.filter(p => p.bed_id === bed.id && !['done', 'failed'].includes(p.status)
+      && progress(p, getPlant(p.plant_key, custom()), today).stage === 'late') : [];
     for (const i of issues.filter(i => i.kind === 'avoid')) {
       items.push(h('li', icon('clash', 24), `${i.names[0]} and ${i.names[1]} don't like being neighbours.`));
     }
     for (const f of rot) items.push(h('li', icon('warn', 24), `Same family as last season here (${f}). Rotate if you can.`));
-    if (cap.pct > 1.05) items.push(h('li', icon('warn', 24), `Crowded: ${Math.round(cap.pct * 100)}% of the bed by spacing.`));
+    if (cap.pct > 1.05) {
+      items.push(h('li', icon('warn', 24), `Crowded: ${Math.round(cap.pct * 100)}% of the bed by spacing.`));
+      if (finished.length) {
+        const names = [...new Set(finished.map(p => displayName(p, getPlant(p.plant_key, custom()))))];
+        items.push(h('li', icon('basket', 24), h('span.grow', `Past harvest, probably pulled: ${names.join(', ')}.`),
+          h('button.btn.sm', { onclick: () => {
+            for (const p of finished) store.updatePlanting(p.id, { status: 'done', done_date: p.done_date || today });
+            toast(`Marked ${finished.length} done`);
+          } }, 'Mark done')));
+      }
+    }
     for (const i of issues.filter(i => i.kind === 'companion').slice(0, 4)) {
       items.push(h('li', icon('heart', 24), `${i.names[0]} + ${i.names[1]} are good companions.`));
     }

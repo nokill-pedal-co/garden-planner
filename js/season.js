@@ -332,7 +332,19 @@ export function bedCapacity(bed, plantings, custom) {
   return { usedSqFt, areaSqFt, pct: areaSqFt ? usedSqFt / areaSqFt : 0 };
 }
 
+// Bush summer squash really do take their full spread; every other cucurbit vines out of the bed
+// (or up a trellis), as do sweet potatoes.
+const BUSH_SQUASH = new Set(['zucchini', 'patio_yellow', 'magda']);
+
+export function isVining(plant) {
+  // By exact key: tromboncino is filed under zucchini but is a climbing vine.
+  return (plant.family === 'cucurbit' && !BUSH_SQUASH.has(plant.key))
+    || plant.key === 'sweet_potato' || plant.base === 'sweet_potato';
+}
+
+/** Bed area one plant needs (sq ft): spacing squared, but a vining crop only counts its ~1 sq ft crown. */
 export function footprintSqFt(plant) {
+  if (isVining(plant)) return 1;
   const ft = Math.max(3, plant.spacingIn || 12) / 12;
   return ft * ft;
 }

@@ -123,3 +123,14 @@ test('pot capacity: one plant fills a pot, round area is pi r^2', () => {
   const ring = bedCapacity({ id: 'r', shape: 'round', length_ft: 3.5, width_ft: 3.5 }, []);
   assert.ok(Math.abs(ring.areaSqFt - Math.PI * 1.75 ** 2) < 1e-9);
 });
+
+test('vining crops only count their crown against bed space', async () => {
+  const { footprintSqFt, isVining } = await import('../js/season.js');
+  const { getPlant } = await import('../js/plants.js');
+  for (const k of ['butternut', 'pumpkin', 'sugar_melon', 'cucumber', 'tromboncino', 'sweet_potato']) {
+    assert.ok(isVining(getPlant(k)), `${k} vines`);
+    assert.equal(footprintSqFt(getPlant(k)), 1);
+  }
+  assert.ok(!isVining(getPlant('zucchini')) && footprintSqFt(getPlant('zucchini')) === 4, 'bush zucchini keeps its spread');
+  assert.equal(footprintSqFt(getPlant('broccoli')), 2.25);
+});
