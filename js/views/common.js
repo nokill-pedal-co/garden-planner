@@ -230,8 +230,40 @@ export async function plantingSheet(planting) {
     store.addPlanting({ ...rest, x_ft: planting.x_ft != null ? planting.x_ft + 0.5 : null, positions: null, locked: false });
     toast('Duplicated');
   } else if (res.action === 'delete') {
-    if (await confirmSheet(`Delete ${displayName(planting, plant)}?`, { ok: 'Delete', danger: true })) store.deletePlanting(planting.id);
+    await removePlanting(planting, plant);
   }
+}
+
+/**
+ * The trash button. Anything that actually grew in a bed is part of its rotation history, so
+ * steer toward "Done" (or "Didn't make it") and keep Delete for mistakes. Resolves true if it left the bed view.
+ */
+export async function removePlanting(planting, plant = getPlant(planting.plant_key, store.customPlants())) {
+  const name = displayName(planting, plant);
+  const grew = planting.bed_id && !['planned', 'done', 'failed'].includes(planting.status);
+  if (!grew) {
+    const history = ['done', 'failed'].includes(planting.status) && planting.bed_id;
+    const ok = await confirmSheet(history
+      ? `Delete ${name} from this bed's history? The "what to plant next" advice will forget it grew here.`
+      : `Delete ${name}?`, { ok: 'Delete', danger: true });
+    if (ok) store.deletePlanting(planting.id);
+    return ok;
+  }
+  const res = await sheet(close => h('div.stack',
+    h('h2', `Remove ${name}?`),
+    h('p.small.muted', "Marking it done keeps it in this bed's history, so next year's advice knows not to plant the same family here."),
+    h('div.stack',
+      h('button.btn.primary', { type: 'button', autofocus: true, onclick: () => close('done') }, icon('check', 16), 'Mark done (pulled or finished)'),
+      h('button.btn', { type: 'button', onclick: () => close('failed') }, 'It died or failed'),
+      h('button.btn.danger', { type: 'button', onclick: () => close('delete') }, icon('trash', 16), 'Delete: added by mistake'),
+      h('button.btn.ghost', { type: 'button', onclick: () => close(null) }, 'Cancel'))),
+  { label: `Remove ${name}` });
+  if (res === 'delete') store.deletePlanting(planting.id);
+  else if (res) {
+    store.updatePlanting(planting.id, { status: res, done_date: planting.done_date || todayStr() });
+    toast(res === 'done' ? `${name} marked done` : `${name} marked as failed`);
+  }
+  return !!res;
 }
 
 function progressLine(pr, eh, plant) {

@@ -3,7 +3,7 @@
 // its real spacing and can be dragged on its own; tap one to select its planting.
 
 import * as store from '../store.js';
-import { h, icon, plantSprite, sprite, clear, toast, confirmSheet } from '../ui.js';
+import { h, icon, plantSprite, sprite, clear, toast } from '../ui.js';
 import { spriteURL } from '../sprites.js';
 import { getPlant, allPlants, CATEGORIES } from '../plants.js';
 import {
@@ -11,7 +11,7 @@ import {
 } from '../season.js';
 import { unitPositions, plantSpots, isSolo } from '../geo.js';
 import { bedAdvice, cropWord, joinWords } from '../advisor.js';
-import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, STATUS_LABELS } from './common.js';
+import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, removePlanting, STATUS_LABELS } from './common.js';
 import { fmtFt } from './yard.js';
 
 const LAST_BED = 'gp2.lastBed';
@@ -365,8 +365,8 @@ export function mount(main, bedId) {
         p.qty > 1 ? h('button.btn.sm', { title: 'Remove the last plant', onclick: () => changeQty(bed, p, -1) }, '−1') : null,
         isPot(bed) ? null : h('button.btn.sm', { onclick: () => store.updatePlanting(p.id, { locked: !p.locked }) }, icon(p.locked ? 'lock' : 'unlock', 16), p.locked ? 'Locked' : 'Lock'),
         isPot(bed) ? null : h('button.btn.sm', { title: 'Move to unplaced tray', onclick: () => { store.updatePlanting(p.id, { bed_id: null, x_ft: null, y_ft: null, positions: null }); ui.selected = null; } }, 'Unplace'),
-        h('button.btn.sm.danger', { 'aria-label': 'Delete planting', onclick: async () => {
-          if (await confirmSheet(`Delete ${displayName(p, plant)}?`, { ok: 'Delete', danger: true })) { store.deletePlanting(p.id); ui.selected = null; }
+        h('button.btn.sm.danger', { 'aria-label': 'Remove planting', onclick: async () => {
+          if (await removePlanting(p, plant)) ui.selected = null;
         } }, icon('trash', 16))));
   }
 
