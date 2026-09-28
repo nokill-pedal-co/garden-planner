@@ -23,6 +23,22 @@ test('tender crops end, hardy/overwintering/perennial crops stay', () => {
   assert.ok(garlic.until > '2027-05-01', `garlic holds the bed into summer: ${garlic.until}`);
 });
 
+test('history names only the crops actually recorded, never the rest of the family', () => {
+  // Bed 7: peppers, leeks and a melon, never tomatoes, garlic, squash or cucumbers.
+  const a = advise([P({ plant_key: 'cal_wonder' }), P({ plant_key: 'cayenne' }), P({ plant_key: 'leeks' }), P({ plant_key: 'tigger_melon' })]);
+  const had = a.rotation.note.match(/^This bed had (.*?)\./)[1];
+  assert.equal(had, 'peppers, leeks and melons');
+  assert.ok(!/garlic|onion/.test(a.rotation.note.split('Good things')[0]));
+  assert.ok(!a.rotation.follow.includes('allium'), 'no alliums straight after leeks');
+  assert.ok(a.prep.every(p => !/tomato/i.test(p.title)), a.prep.map(p => p.title).join(' / '));
+});
+
+test('radishes and arugula are not treated as hungry cabbage-family crops', () => {
+  const a = advise([P({ plant_key: 'radish_mixed' }), P({ plant_key: 'arugula' })]);
+  assert.deepEqual(a.rotation.avoid, []);
+  assert.ok(!a.prep.some(p => /roots|compost/i.test(p.title)));
+});
+
 test('rotation after nightshades: avoid them, follow with legumes', () => {
   const a = advise([P({ plant_key: 'tomato' }), P({ plant_key: 'pepper' })]);
   assert.deepEqual(a.rotation.avoid, ['solanaceae']);

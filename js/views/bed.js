@@ -10,7 +10,7 @@ import {
   progress, displayName, todayStr, companionIssues, rotationIssues, bedCapacity, expectedHarvest, prettyDate,
 } from '../season.js';
 import { unitPositions, plantSpots, isSolo } from '../geo.js';
-import { bedAdvice, familyName } from '../advisor.js';
+import { bedAdvice, cropWord, joinWords } from '../advisor.js';
 import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, STATUS_LABELS } from './common.js';
 import { fmtFt } from './yard.js';
 
@@ -100,7 +100,7 @@ export function mount(main, bedId) {
         h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), bed.kind === 'container' ? 'Edit pot' : 'Edit bed'),
       ),
       h('div.bed-layout',
-        h('div.stack', stage(bed, plantings, issues), planning ? null : issuesCard(issues, rot, cap, bed)),
+        h('div.stack', stage(bed, plantings, issues), planning ? null : issuesCard(issues, rot, cap, bed, season)),
         h('div.stack', selectedCard(bed), planning ? advisorCard(bed, advice) : null, paletteCard(), trayCard(planning ? ui.planYear : season)),
       ),
     );
@@ -484,7 +484,7 @@ export function mount(main, bedId) {
       }, plantSprite(i.plant.key, custom(), { size: 32, alt: '' }), h('span', i.plant.name), h('span.small.muted', i.reason)))) : null));
   }
 
-  function issuesCard(issues, rot, cap, bed) {
+  function issuesCard(issues, rot, cap, bed, season) {
     const items = [];
     // Over capacity is usually finished crops that were never marked done: offer to clear them.
     const today = todayStr();
@@ -493,7 +493,16 @@ export function mount(main, bedId) {
     for (const i of issues.filter(i => i.kind === 'avoid')) {
       items.push(h('li', icon('clash', 24), `${i.names[0]} and ${i.names[1]} don't like being neighbours.`));
     }
-    for (const f of rot) items.push(h('li', icon('warn', 24), `You had ${familyName(f)} here last year too. Switching to something else keeps bugs and disease from building up.`));
+    // Name the crops actually recorded in each year, never the whole family.
+    const kindsIn = (f, yr) => joinWords([...new Set(state().plantings
+      .filter(p => p.bed_id === bed.id && p.season === yr && getPlant(p.plant_key, custom()).family === f)
+      .map(p => cropWord(getPlant(p.plant_key, custom()), custom())))]);
+    for (const f of rot) {
+      const was = kindsIn(f, season - 1), now = kindsIn(f, season);
+      items.push(h('li', icon('warn', 24), was === now
+        ? `${was[0].toUpperCase()}${was.slice(1)} were here last year too. A different bed keeps bugs and disease from building up.`
+        : `This bed had ${was} last year, and ${now} are the same family. A different bed keeps bugs and disease from building up.`));
+    }
     if (cap.pct > 1.05) {
       items.push(h('li', icon('warn', 24), `Crowded: ${Math.round(cap.pct * 100)}% of the bed by spacing.`));
       if (finished.length) {

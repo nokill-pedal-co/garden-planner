@@ -362,7 +362,7 @@ crop('kohlrabi', 'Kohlrabi', 'brassicas', 'brassica', 'turnip', {
   aliases: ['kohl rabi'],
   notes: 'Pick at 2–3" across before it turns woody. Spring and fall.',
 });
-crop('radicchio', 'Radicchio', 'brassicas', 'aster', 'cabbage', {
+crop('radicchio', 'Radicchio', 'greens', 'aster', 'cabbage', {
   tint: { A: RED, B: WHITE }, days: 85, daysFrom: 'sow', harvestDays: 30, spacingIn: 10,
   hardiness: 'hardy',
   windows: { direct: [8, 13] },
