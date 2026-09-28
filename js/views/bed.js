@@ -337,12 +337,11 @@ export function mount(main, bedId) {
         } }, icon('trash', 16))));
   }
 
-  function paletteCard() {
-    const plants = allPlants(custom());
+  function paletteGrid() {
     const q = ui.q.toLowerCase();
-    const shown = plants.filter(p => (ui.cat === 'all' || p.category === ui.cat)
+    const shown = allPlants(custom()).filter(p => (ui.cat === 'all' || p.category === ui.cat)
       && (!q || p.name.toLowerCase().includes(q) || (p.aliases || []).some(a => a.toLowerCase().includes(q))));
-    const grid = h('div.grid', shown.slice(0, 150).map(p => h('button.chip', {
+    return h('div.grid', shown.slice(0, 150).map(p => h('button.chip', {
       type: 'button', 'aria-pressed': String(ui.armed?.plantKey === p.key), title: p.name,
       onclick: () => {
         ui.armed = ui.armed?.plantKey === p.key ? null : { plantKey: p.key };
@@ -350,8 +349,13 @@ export function mount(main, bedId) {
         if (ui.armed) toast(`Tap the soil to place ${p.name}`);
       },
     }, plantSprite(p.key, custom(), { size: 32, alt: '' }), p.name)));
+  }
+
+  function paletteCard() {
+    let grid = paletteGrid();
+    // Typing only swaps the results; rebuilding the input would reset the caret to the start.
     const search = h('input', { type: 'search', placeholder: 'Search…', value: ui.q, 'aria-label': 'Search plants',
-      oninput: e => { ui.q = e.target.value; const g = paletteCard(); card.replaceWith(g); g.querySelector('input').focus(); } });
+      oninput: e => { ui.q = e.target.value; const next = paletteGrid(); grid.replaceWith(next); grid = next; } });
     const card = h('section.card.px.palette',
       h('div.row', h('h3.grow', { style: { margin: 0 } }, 'Seed box'),
         h('label.row.small', 'Place as',

@@ -10,24 +10,33 @@ export function mount(main, key) {
   main.append(view);
   const ui = { q: '', cat: 'all' };
 
-  function render() {
+  const results = h('div');
+
+  /** Just the plant grid, so typing in the search box never rebuilds (and un-focuses) the input. */
+  function renderResults() {
     const custom = store.customPlants();
-    const plants = allPlants(custom);
     const q = ui.q.toLowerCase();
-    const shown = plants.filter(p => (ui.cat === 'all' || p.category === ui.cat)
+    const shown = allPlants(custom).filter(p => (ui.cat === 'all' || p.category === ui.cat)
       && (!q || p.name.toLowerCase().includes(q) || (p.aliases || []).some(a => a.toLowerCase().includes(q))));
-    const grid = h('div.lib-grid', shown.map(p => h('button.lib-item.px', { type: 'button', onclick: () => detail(p.key) },
-      plantSprite(p.key, custom, { size: 48, alt: '' }), h('span', p.name),
-      h('span.small', [p.days ? `${p.days}d` : null, p.perennial ? 'perennial' : null, p.spacingIn ? `${p.spacingIn}"` : null].filter(Boolean).join(' · ')))));
-    const search = h('input', { type: 'search', placeholder: `Search ${plants.length} plants…`, value: ui.q, 'aria-label': 'Search plants',
-      oninput: e => { ui.q = e.target.value; render(); view.querySelector('input[type=search]').focus(); } });
-    fill(view, 
+    fill(results, shown.length
+      ? h('div.lib-grid', shown.map(p => h('button.lib-item.px', { type: 'button', onclick: () => detail(p.key) },
+        plantSprite(p.key, custom, { size: 48, alt: '' }), h('span', p.name),
+        h('span.small', [p.days ? `${p.days}d` : null, p.perennial ? 'perennial' : null, p.spacingIn ? `${p.spacingIn}"` : null].filter(Boolean).join(' · ')))))
+      : h('p.empty', 'No matches.'));
+  }
+
+  function render() {
+    const count = allPlants(store.customPlants()).length;
+    const search = h('input', { type: 'search', placeholder: `Search ${count} plants…`, value: ui.q, 'aria-label': 'Search plants',
+      oninput: e => { ui.q = e.target.value; renderResults(); } });
+    fill(view,
       h('h1', 'Library'),
       h('div.stack', search,
         h('div.cats.row.wrap', [['all', 'All'], ...CATEGORIES.map(c => [c.key, c.name])].map(([k, n]) =>
           h(`button.btn.sm${ui.cat === k ? '.primary' : ''}`, { onclick: () => { ui.cat = k; render(); } }, n)))),
       h('div', { style: { height: '14px' } }),
-      shown.length ? grid : h('p.empty', 'No matches.'));
+      results);
+    renderResults();
   }
 
   render();
