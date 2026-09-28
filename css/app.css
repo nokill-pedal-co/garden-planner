@@ -315,13 +315,15 @@ input[type="range"] { accent-color: var(--green); }
 .bed-head h1 { margin: 0; font-size: 26px; }
 .bed-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 4px 4px 8px; margin: 0 -4px 8px; scrollbar-width: thin; }
 .bed-tabs .btn { white-space: nowrap; flex: none; }
+.bed-tabs .pot-picker { width: auto; flex: none; min-height: 34px; padding-top: 2px; padding-bottom: 2px; font-size: 15px; }
+.bed-tabs .pot-picker.active { background-color: var(--green); color: var(--ink); }
 
 .bed-layout { display: grid; grid-template-columns: 1fr; gap: 16px; }
 @media (min-width: 1000px) { .bed-layout { grid-template-columns: 1fr 320px; } }
 
 .bed-stage { position: relative; padding: 18px; background: var(--wood); margin: 3px 9px 9px 3px; }
 .bed-stage.container-kind { background: #3b4a63; }
-.bed-stage.round { border-radius: 50%; padding: 14px; }
+.bed-stage.round { border-radius: 50%; padding: 14px; width: fit-content; margin-left: auto; margin-right: auto; }
 .bed-soil.round { border-radius: 50%; }
 .bed-soil {
   position: relative;

@@ -14,6 +14,7 @@ import { editBedSheet, newBedSheet, plantingSheet, harvestSheet, STATUS_LABELS }
 import { fmtFt } from './yard.js';
 
 const LAST_BED = 'gp2.lastBed';
+const isPot = bed => bed?.kind === 'container';
 const SNAP = 1 / 12;   // ft: placement snaps to the inch, i.e. effectively free
 const KEY_STEP = 0.25; // ft per arrow-key press
 
@@ -73,7 +74,7 @@ export function mount(main, bedId) {
         h('div', { style: { width: '220px' } },
           h('div.small.muted', `Space used ${Math.round(cap.usedSqFt * 10) / 10} / ${Math.round(cap.areaSqFt * 10) / 10} sq ft`),
           h(`div.meter${cap.pct > 1 ? '.over' : ''}`, h('i', { style: { width: `${Math.min(100, Math.round(cap.pct * 100))}%` } }), h('b', `${Math.round(cap.pct * 100)}%`))),
-        h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), 'Edit bed'),
+        h('button.btn.sm', { onclick: () => editBedSheet(bed) }, icon('edit', 16), isPot(bed) ? 'Edit pot' : 'Edit bed'),
       ),
       h('div.bed-layout',
         h('div.stack', stage(bed, plantings, issues), issuesCard(issues, rot, cap)),
@@ -83,11 +84,22 @@ export function mount(main, bedId) {
   }
 
   function bedTabs(active) {
-    const beds = state().beds.filter(b => !b.archived);
+    const all = state().beds.filter(b => !b.archived);
+    const beds = all.filter(b => b.kind !== 'container');
+    const pots = all.filter(b => b.kind === 'container').sort((a, b) => a.name.localeCompare(b.name));
+    // Pots get their own picker so thirty of them don't crowd out the beds.
+    const potPicker = pots.length ? h('select.pot-picker', {
+      'aria-label': 'Pots',
+      onchange: e => { if (e.target.value) location.hash = `#/bed/${e.target.value}`; },
+    },
+    h('option', { value: '' }, `Pots (${pots.length})…`),
+    pots.map(b => h('option', { value: b.id, selected: b.id === active?.id }, b.name))) : null;
+    if (potPicker && active?.kind === 'container') potPicker.classList.add('active');
     return h('div.bed-tabs', { role: 'tablist', 'aria-label': 'Beds' },
       beds.map(b => h(`a.btn.sm${b.id === active?.id ? '.primary' : ''}`, {
         href: `#/bed/${b.id}`, role: 'tab', 'aria-selected': String(b.id === active?.id),
       }, b.name)),
+      potPicker,
       h('button.btn.sm', { onclick: () => newBedSheet().then(b => b && (location.hash = `#/bed/${b.id}`)) }, icon('plus', 16), 'New'));
   }
 
@@ -106,9 +118,12 @@ export function mount(main, bedId) {
   }
 
   function layout(bed, wrap, soil, grid, plantings, issues) {
-    const avail = wrap.clientWidth - 36;
+    // Round stages shrink-wrap the soil, so measure the column they sit in.
+    const avail = (bed.shape === 'round' ? wrap.parentElement.clientWidth : wrap.clientWidth) - 36;
     const maxH = Math.max(180, innerHeight * 0.55);
-    const ppf = Math.max(20, Math.min(160, Math.floor(Math.min(avail / bed.length_ft, maxH / bed.width_ft))));
+    // Small things (pots) get zoomed in further so the plant is actually visible.
+    const cap = bed.length_ft <= 2.5 ? 300 : 160;
+    const ppf = Math.max(20, Math.min(cap, Math.floor(Math.min(avail / bed.length_ft, maxH / bed.width_ft))));
     const W = Math.round(bed.length_ft * ppf), H = Math.round(bed.width_ft * ppf);
     Object.assign(soil.style, {
       width: `${W}px`, height: `${H}px`,
@@ -187,7 +202,8 @@ export function mount(main, bedId) {
         const p = state().plantings.find(x => x.id === el.dataset.id);
         if (!p) return;
         e.preventDefault();
-        drag = { id: p.id, i: Number(el.dataset.i), el, sx: e.clientX, sy: e.clientY, moved: false, locked: p.locked };
+        // A potted plant *is* its pot: it stays centred (move the pot in the Yard instead).
+        drag = { id: p.id, i: Number(el.dataset.i), el, sx: e.clientX, sy: e.clientY, moved: false, locked: p.locked || isPot(bed) };
         dragging = true;
         try { soil.setPointerCapture(e.pointerId); } catch { /* synthetic or already-released pointer */ }
         return;
@@ -256,7 +272,7 @@ export function mount(main, bedId) {
   }
 
   function place(bed, x, y) {
-    [x, y] = [snap(x), snap(y)];
+    [x, y] = isPot(bed) ? [bed.length_ft / 2, bed.width_ft / 2] : [snap(x), snap(y)];
     const today = todayStr();
     if (ui.armed.plantingId) {
       // A planting from the tray: its plants go in a row starting where you tapped.
@@ -308,8 +324,8 @@ export function mount(main, bedId) {
         h('button.btn.sm.warn', { onclick: () => harvestSheet(p) }, icon('basket', 16), 'Harvest'),
         h('button.btn.sm', { title: 'Add one more plant', onclick: () => changeQty(bed, p, 1) }, '+1'),
         p.qty > 1 ? h('button.btn.sm', { title: 'Remove the last plant', onclick: () => changeQty(bed, p, -1) }, '−1') : null,
-        h('button.btn.sm', { onclick: () => store.updatePlanting(p.id, { locked: !p.locked }) }, icon(p.locked ? 'lock' : 'unlock', 16), p.locked ? 'Locked' : 'Lock'),
-        h('button.btn.sm', { title: 'Move to unplaced tray', onclick: () => { store.updatePlanting(p.id, { bed_id: null, x_ft: null, y_ft: null, positions: null }); ui.selected = null; } }, 'Unplace'),
+        isPot(bed) ? null : h('button.btn.sm', { onclick: () => store.updatePlanting(p.id, { locked: !p.locked }) }, icon(p.locked ? 'lock' : 'unlock', 16), p.locked ? 'Locked' : 'Lock'),
+        isPot(bed) ? null : h('button.btn.sm', { title: 'Move to unplaced tray', onclick: () => { store.updatePlanting(p.id, { bed_id: null, x_ft: null, y_ft: null, positions: null }); ui.selected = null; } }, 'Unplace'),
         h('button.btn.sm.danger', { 'aria-label': 'Delete planting', onclick: async () => {
           if (await confirmSheet(`Delete ${displayName(p, plant)}?`, { ok: 'Delete', danger: true })) { store.deletePlanting(p.id); ui.selected = null; }
         } }, icon('trash', 16))));

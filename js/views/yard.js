@@ -79,7 +79,17 @@ export function mount(main) {
 
   function hitItem([x, y]) {
     const beds = visibleBeds();
+    // Pots first, with a grab radius at least as big as the plant drawn in them: grabbing the
+    // plant is grabbing the pot.
+    const spriteFt = (ppf() >= 16 ? 16 : 8) / ppf();
     for (let i = beds.length - 1; i >= 0; i--) {
+      const b = beds[i];
+      if (b.kind !== 'container') continue;
+      const r = Math.max(b.length_ft, spriteFt) / 2 + 2 / ppf();
+      if (Math.hypot(x - b.x_ft, y - b.y_ft) <= r) return { type: 'bed', id: b.id };
+    }
+    for (let i = beds.length - 1; i >= 0; i--) {
+      if (beds[i].kind === 'container') continue;
       if (pointInPolygon([x, y], bedOutline(beds[i]))) return { type: 'bed', id: beds[i].id };
     }
     const ss = structures();
